@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
 import time
 import subprocess
 import requests
@@ -31,26 +29,32 @@ ADB_CMD = "adb"
 PACKAGE_NAME = "com.readygo.barrel.gp"
 
 TEMPLATES_DIR = "treasures"
-SCREENSHOT_FOLDER = "debug"
-os.makedirs(SCREENSHOT_FOLDER, exist_ok=True)
+SCREENSHOT_PATH = "current_screen.png"
 
 CHECK_INTERVAL_SEC = 10
-SCREENSHOTS_PER_CYCLE = 3
-INTERVAL_BETWEEN_SHOTS = 1
-MATCH_THRESHOLD = 0.40
+
+# Lasciamo la soglia come vuoi tu
+MATCH_THRESHOLD = 0.55
+
+# Anti-spam + robustezza
 MIN_SECONDS_BETWEEN_ALERTS = 600
 CONSECUTIVE_HITS_REQUIRED = 1
 
+# ROI (quella che avete “centrato” in basso a dx)
 ROI_X_START_FRAC = 0.50
 ROI_X_END_FRAC   = 0.82
 ROI_Y_START_FRAC = 0.84
 ROI_Y_END_FRAC   = 0.97
 
+# Debug ROI
 DEBUG_SAVE_ROI = True
-DEBUG_ONLY_ONCE = True
+DEBUG_ONLY_ONCE = True   # metti False se vuoi salvare a ogni ciclo
 DEBUG_ROI_PATH = "roi_debug.png"
 DEBUG_SCREENSHOT_MARKED = "debug_screen_marked.png"
 
+# =============================
+# UTILITY
+# =============================
 def run_cmd(cmd, timeout=30):
     try:
         proc = subprocess.run(
@@ -71,44 +75,18 @@ def check_adb_device() -> bool:
     if code != 0:
         print("[!] Errore eseguendo 'adb devices':", err)
         return False
+
     lines = out.strip().splitlines()
     devices = [l for l in lines[1:] if l.strip()]
     if not devices:
         print("[!] Nessun dispositivo ADB trovato.")
         return False
+
     print("[+] Dispositivo ADB rilevato:", devices[0])
     return True
 
-
 def take_screenshot(path: str) -> bool:
     try:
-        proc = subprocess.run(
-            [ADB_CMD, "exec-out", "screencap", "-p"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=30,
-            check=False
-        )
-        if proc.returncode != 0:
-            print("[!] Errore screencap:", proc.stderr.decode("utf-8", errors="ignore"))
-            return False
-        # Write the image to a temporary path
-        tmp_path = path + ".tmp"
-        with open(tmp_path, "wb") as f:
-            f.write(proc.stdout)
-        # Load and resize the image
-        import cv2
-        img = cv2.imread(tmp_path)
-        if img is None:
-            print("[!] Errore leggendo screenshot.")
-            return False
-        img = cv2.resize(img, (img.shape[1] // 2, img.shape[0] // 2))
-        cv2.imwrite(path, img, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
-        os.remove(tmp_path)
-        return True
-    except Exception as e:
-        print("[!] Eccezione screencap:", e)
-        return False
         with open(path, "wb") as f:
             proc = subprocess.run(
                 [ADB_CMD, "exec-out", "screencap", "-p"],
@@ -133,14 +111,17 @@ def load_image(path: str):
 
 def crop_roi(img):
     H, W = img.shape[:2]
+
     xs = int(W * ROI_X_START_FRAC)
     xe = int(W * ROI_X_END_FRAC)
     ys = int(H * ROI_Y_START_FRAC)
     ye = int(H * ROI_Y_END_FRAC)
+
     xs = max(0, min(xs, W - 1))
     xe = max(xs + 1, min(xe, W))
     ys = max(0, min(ys, H - 1))
     ye = max(ys + 1, min(ye, H))
+
     roi = img[ys:ye, xs:xe]
     return roi, (xs, ys, xe, ye)
 
@@ -158,6 +139,7 @@ def load_all_templates(directory: str):
     if not os.path.isdir(directory):
         print(f"[!] Cartella template '{directory}' non trovata.")
         return templates
+
     for name in sorted(os.listdir(directory)):
         if not name.lower().endswith((".png", ".jpg", ".jpeg")):
             continue
@@ -166,17 +148,20 @@ def load_all_templates(directory: str):
         if img is not None:
             templates.append((name, img))
             print(f"[+] Template caricato: {full_path}")
+
     if not templates:
         print(f"[!] Nessun template trovato in '{directory}'.")
     return templates
 
 def debug_dump_roi(full_img, roi, coords):
     xs, ys, xe, ye = coords
+
     try:
         cv2.imwrite(DEBUG_ROI_PATH, roi)
         print(f"[+] ROI di debug salvata in {DEBUG_ROI_PATH}")
     except Exception as e:
         print("[!] Errore salvando ROI di debug:", e)
+
     try:
         img_marked = full_img.copy()
         cv2.rectangle(img_marked, (xs, ys), (xe, ye), (0, 255, 0), 3)
@@ -185,72 +170,56 @@ def debug_dump_roi(full_img, roi, coords):
     except Exception as e:
         print("[!] Errore salvando screenshot marcato:", e)
 
-
-def take_multiple_screenshots_parallel(num_screenshots=3, delay_sec=1):
-    screenshot_paths = []
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    with ThreadPoolExecutor(max_workers=num_screenshots) as executor:
-        futures = []
-        for i in range(num_screenshots):
-            shot_path = os.path.join(SCREENSHOT_FOLDER, f"screen_{i}_{timestamp}.jpg")
-            futures.append(executor.submit(take_screenshot_with_delay, shot_path, i * delay_sec))
-            screenshot_paths.append(shot_path)
-        for future in as_completed(futures):
-            future.result()
-    return screenshot_paths
-
-def take_screenshot_with_delay(path: str, delay: int) -> bool:
-    time.sleep(delay)
-    return take_screenshot(path)
-
-
+# =============================
+# MAIN
+# =============================
 def main():
-    # Pulizia della cartella debug all'avvio
-    for fname in os.listdir(SCREENSHOT_FOLDER):
-        try:
-            os.remove(os.path.join(SCREENSHOT_FOLDER, fname))
-        except Exception:
-            pass
+    print("=== Last Z Treasure Watcher (scan directory, ROI, debug) ===")
 
-    print("=== Last Z Treasure Watcher (multi-screenshot mode) ===")
     if not check_adb_device():
         return
+
     templates = load_all_templates(TEMPLATES_DIR)
     if not templates:
         return
+
     last_alert_time = 0.0
     consecutive_hits = 0
     debug_done = False
-    while True:
-        screenshots = []
-        for i in range(SCREENSHOTS_PER_CYCLE):
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            shot_path = os.path.join(SCREENSHOT_FOLDER, f"screen_{i}_{timestamp}.jpg")
-            if take_screenshot(shot_path):
-                screenshots.append(shot_path)
-            time.sleep(INTERVAL_BETWEEN_SHOTS)
 
+    while True:
+        print("\n[*] Catturo screenshot...")
+        if not take_screenshot(SCREENSHOT_PATH):
+            time.sleep(CHECK_INTERVAL_SEC)
+            continue
+
+        img = load_image(SCREENSHOT_PATH)
+        if img is None:
+            time.sleep(CHECK_INTERVAL_SEC)
+            continue
+
+        roi, (xs, ys, xe, ye) = crop_roi(img)
+
+        # Debug ROI
+        if DEBUG_SAVE_ROI and (not DEBUG_ONLY_ONCE or not debug_done):
+            debug_dump_roi(img, roi, (xs, ys, xe, ye))
+            debug_done = True
+
+        # Match su TUTTI i template
         best_score = 0.0
         best_name = None
         scores_debug = []
 
-        for path in screenshots:
-            img = load_image(path)
-            if img is None:
-                continue
-            roi, (xs, ys, xe, ye) = crop_roi(img)
-            if DEBUG_SAVE_ROI and (not DEBUG_ONLY_ONCE or not debug_done):
-                debug_dump_roi(img, roi, (xs, ys, xe, ye))
-                debug_done = True
-            for name, tmpl in templates:
-                score = compute_match_score(roi, tmpl)
-                scores_debug.append((f"{os.path.basename(path)}:{name}", score))
-                if score > best_score:
-                    best_score = score
-                    best_name = f"{os.path.basename(path)}:{name}"
+        for name, tmpl in templates:
+            score = compute_match_score(roi, tmpl)
+            scores_debug.append((name, score))
+            if score > best_score:
+                best_score = score
+                best_name = name
 
         print("[i] Scores:", ", ".join(f"{n}={s:.3f}" for n, s in scores_debug))
-        print(f"[i] BEST MATCH: {best_name} score={best_score:.3f} soglia={MATCH_THRESHOLD}")
+        print(f"[i] BEST: {best_name} score={best_score:.3f} ROI=({xs},{ys})-({xe},{ye}) soglia={MATCH_THRESHOLD}")
+
         now = time.time()
         elapsed = now - last_alert_time
 
@@ -268,12 +237,13 @@ def main():
 
             print(f"[+] RILEVATO! ({best_name}) score={best_score:.3f}")
             send_notification(f"🎁 Tesoro rilevato! (template: {best_name}, score={best_score:.3f})")
+
             last_alert_time = now
             consecutive_hits = 0
-
 
         print(f"[*] Attendo {CHECK_INTERVAL_SEC} secondi...")
         time.sleep(CHECK_INTERVAL_SEC)
 
 if __name__ == "__main__":
     main()
+
