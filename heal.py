@@ -46,6 +46,12 @@ HEAL_BATCH_DEFAULT = 50
 HEAL_DELAY_MULTIPLIER = 0.7
 HEAL_FINISHED = os.path.join(HEAL_FINISHED_DIR, "screen_heal_loop.png")
 
+# Help colleague config
+HELP_COLLEAGUE_ROI = (0.74, 0.86, 0.70, 0.86)
+TEMPLATES_HELP_COLLEAGUE_DIR = "colleague"
+MATCH_THRESHOLD_HELP_COLLEAGUE = 0.35
+HELP_COLLEAGUE_COOLDOWN = 20  # secondi
+
 # ============================================================
 # ROI (FRAZIONI dello schermo: x1,x2,y1,y2)
 # Modifica qui se serve, come hai già fatto.
@@ -192,7 +198,6 @@ def load_templates_from_dir(directory: str) -> List[Tuple[str, np.ndarray]]:
     print(f"[+] Caricati {len(templates)} template da '{directory}'")
     return templates
 
-
 def match_any(roi_img: np.ndarray, templates: List[Tuple[str, np.ndarray]]):
     """
     Ritorna:
@@ -218,7 +223,6 @@ def match_any(roi_img: np.ndarray, templates: List[Tuple[str, np.ndarray]]):
             best_hw = (th, tw)
 
     return best_name, best_score, best_loc, best_hw
-
 
 def tap_match_in_fullscreen(roi_coords, match_loc, tmpl_hw):
     """Converte loc dentro ROI -> coordinate assolute e tappa al centro."""
@@ -293,10 +297,12 @@ def heal_watcher(stop_evt: threading.Event):
 
     # help templates possono anche mancare: in quel caso facciamo solo heal
     while not stop_evt.is_set():
-        if not take_screenshot(HEAL_FINISHED):
+        snap_path = os.path.join(DEBUG_DIR, "screen_treasure.png")
+        if not take_screenshot(snap_path):
+            time.sleep(CHECK_INTERVAL_SEC)
             continue
-    
-        img = load_image(HEAL_FINISHED)
+
+        img = load_image(snap_path)
         if img is None:
             continue
 
@@ -322,9 +328,6 @@ def heal_watcher(stop_evt: threading.Event):
 
         # 1) cerca icona heal sulla mappa
         roi_map, coords_map = crop_roi(img, HEAL_ICON_ROI)
-        if DEBUG_SAVE_ROIS:
-            cv2.imwrite(os.path.join(DEBUG_DIR, "roi_heal_icon.png"), roi_map)
-
         name, score, loc, hw = match_any(roi_map, heal_templates)
         print(f"[HEAL] heal_icon best={name} score={score:.3f} thr={MATCH_THRESHOLD_HEAL}")
 
@@ -346,8 +349,6 @@ def heal_watcher(stop_evt: threading.Event):
             continue
 
         roi_label, coords_label = crop_roi(img_h, HOSPITAL_FIRST_ROW_NUMBER_LABEL_ROI)
-        if DEBUG_SAVE_ROIS:
-            cv2.imwrite(os.path.join(DEBUG_DIR, "roi_hospital_label.png"), roi_label)
 
         # tap al centro della ROI label (non template: è “zona fissa” che vuoi)
         xs, ys, xe, ye = coords_label
@@ -388,6 +389,44 @@ def heal_watcher(stop_evt: threading.Event):
         # 4) aspetta un po’ prima del prossimo ciclo
         heal_sleep(HEAL_DELAY_MULTIPLIER)
 
+# ============================================================
+# THREAD 3: HELP-COLLEAGUE AUTOMATION
+# ============================================================
+def help_colleague_watcher(stop_evt: threading.Event):
+    templates = load_templates_from_dir(TEMPLATES_HELP_COLLEAGUE_DIR)
+    if not templates:
+        print("[HELP-COLLEAGUE] Nessun template, thread fermo.")
+        return
+
+    last_click = 0.0
+
+    while not stop_evt.is_set():
+        snap = os.path.join(DEBUG_DIR, "screen_help_colleague.png")
+        if not take_screenshot(snap):
+            time.sleep(CHECK_INTERVAL_SEC)
+            continue
+
+        img = load_image(snap)
+        if img is None:
+            time.sleep(CHECK_INTERVAL_SEC)
+            continue
+
+        roi, coords = crop_roi(img, HELP_COLLEAGUE_ROI)
+
+        if DEBUG_SAVE_ROIS:
+            cv2.imwrite(os.path.join(DEBUG_DIR, "roi_help_colleague.png"), roi)
+
+        name, score, loc, hw = match_any(roi, templates)
+        print(f"[HELP-COLLEAGUE] best={name} score={score:.3f}")
+
+        now = time.time()
+        if score >= MATCH_THRESHOLD_HELP_COLLEAGUE and (now - last_click) >= HELP_COLLEAGUE_COOLDOWN:
+            cx, cy = tap_match_in_fullscreen(coords, loc, hw)
+            print(f"[HELP-COLLEAGUE] tap @ {cx},{cy}")
+            last_click = now
+
+        time.sleep(CHECK_INTERVAL_SEC)
+
 
 # ============================================================
 # MAIN
@@ -403,9 +442,11 @@ def main():
 
     t1 = threading.Thread(target=treasure_watcher, args=(stop_evt,), daemon=True)
     t2 = threading.Thread(target=heal_watcher, args=(stop_evt,), daemon=True)
+    t3 = threading.Thread(target=help_colleague_watcher, args=(stop_evt,), daemon=True)
 
     t1.start()
     t2.start()
+    t3.start()
 
     try:
         while True:
