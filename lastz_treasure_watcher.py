@@ -22,7 +22,7 @@ PACKAGE_NAME = "com.readygo.barrel.gp"
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1446565181265154190/pL-0gcgP09RlQqnqHqQDIdQqm505tqa744is2R_1eGA3Had4OXmhPgQrTLYXYzaMld0S"
 
 # Loop timing
-CHECK_INTERVAL_SEC = 8
+CHECK_INTERVAL_SEC = 3
 
 # Template match threshold
 MATCH_THRESHOLD_TREASURE = 0.50
@@ -286,7 +286,8 @@ def treasure_watcher(stop_evt: threading.Event):
             cv2.imwrite(os.path.join(DEBUG_DIR, "roi_treasure.png"), roi)
 
         name, score, loc, hw = match_any(roi, templates)
-        log_event(f"[TREASURE] best={name} score={score:.3f} ROI={coords} thr={MATCH_THRESHOLD_TREASURE}")
+        if not DEBUG_EVENTS_ONLY:
+            log_event(f"[TREASURE] best={name} score={score:.3f} ROI={coords} thr={MATCH_THRESHOLD_TREASURE}")
 
         if score >= MATCH_THRESHOLD_TREASURE:
             hits += 1
@@ -348,7 +349,8 @@ def heal_watcher(stop_evt: threading.Event):
         # 1) cerca icona heal sulla mappa
         roi_map, coords_map = crop_roi(img, HEAL_ICON_ROI)
         name, score, loc, hw = match_any(roi_map, heal_templates)
-        log_event(f"[HEAL] heal_icon best={name} score={score:.3f} thr={MATCH_THRESHOLD_HEAL}")
+        if not DEBUG_EVENTS_ONLY:
+            log_event(f"[HEAL] heal_icon best={name} score={score:.3f} thr={MATCH_THRESHOLD_HEAL}")
 
         if score < MATCH_THRESHOLD_HEAL:
             time.sleep(5)
@@ -397,7 +399,8 @@ def heal_watcher(stop_evt: threading.Event):
                     cv2.imwrite(os.path.join(DEBUG_DIR, "roi_help_icon.png"), roi_help)
 
                 n2, s2, loc2, hw2 = match_any(roi_help, help_templates)
-                log_event(f"[HEAL] help_icon best={n2} score={s2:.3f} thr={MATCH_THRESHOLD_HELP}")
+                if not DEBUG_EVENTS_ONLY:
+                    log_event(f"[HEAL] help_icon best={n2} score={s2:.3f} thr={MATCH_THRESHOLD_HELP}")
 
                 if s2 >= MATCH_THRESHOLD_HELP:
                     cx2, cy2 = tap_match_in_fullscreen(coords_help, loc2, hw2)
@@ -432,7 +435,8 @@ def help_colleague_watcher(stop_evt: threading.Event):
             cv2.imwrite(os.path.join(DEBUG_DIR, "roi_help_colleague.png"), roi)
 
         name, score, loc, hw = match_any(roi, templates)
-        log_event(f"[HELP-COLLEAGUE] best={name} score={score:.3f}")
+        if not DEBUG_EVENTS_ONLY:
+            log_event(f"[HELP-COLLEAGUE] best={name} score={score:.3f}")
 
         now = time.time()
         if score >= MATCH_THRESHOLD_HELP_COLLEAGUE and (now - last_click) >= HELP_COLLEAGUE_COOLDOWN:
