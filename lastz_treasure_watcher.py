@@ -98,8 +98,7 @@ DEBUG_EVENTS_ONLY      = True    # scrive solo quando riconosce un evento
 # ============================================================
 
 def log_event(msg: str):
-    if DEBUG_EVENTS_ONLY:
-        print(msg)
+    print(msg)
 
 def run_cmd(cmd: List[str], timeout: int = 30) -> Tuple[int, str, str]:
     try:
