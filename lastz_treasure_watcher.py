@@ -3,6 +3,7 @@
 
 import os
 import time
+from datetime import datetime
 import subprocess
 import threading
 from typing import List, Tuple, Optional
@@ -98,7 +99,8 @@ DEBUG_EVENTS_ONLY      = True    # scrive solo quando riconosce un evento
 # ============================================================
 
 def log_event(msg: str):
-    print(msg)
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{ts}] {msg}", flush=True)
 
 def run_cmd(cmd: List[str], timeout: int = 30) -> Tuple[int, str, str]:
     try:
