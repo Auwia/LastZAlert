@@ -43,7 +43,7 @@ DEBUG_DIR               = "debug"
 os.makedirs(DEBUG_DIR, exist_ok=True)
 
 # Heal config
-HEAL_BATCH_DEFAULT = 50
+HEAL_BATCH_DEFAULT = 60
 HEAL_DELAY_MULTIPLIER = 0.7
 HEAL_FINISHED = os.path.join(HEAL_FINISHED_DIR, "screen_heal_loop.png")
 
@@ -84,6 +84,9 @@ HELP_ICON_ROI = (0.30, 0.80, 0.40, 0.85)
 # Dentro ospedale: prima riga campo numero (label su cui tappare per aprire tastiera)
 # Metti qui la zona della label numerica della PRIMA RIGA (Shock Cavalry)
 HOSPITAL_FIRST_ROW_NUMBER_LABEL_ROI = (0.78, 0.93, 0.33, 0.42)
+
+#HOSPITAL_BANNER_ROI = (0.25, 0.75, 0.02, 0.14)
+HOSPITAL_BANNER_ROI = (0.0, 1.0, 0.0, 0.22)
 
 # ============================================================
 # Debug
@@ -151,9 +154,21 @@ def take_screenshot(path: str) -> bool:
         return False
 
 def screenshot_producer(stop_evt: threading.Event):
+    tmp_path = SCREENSHOT_PATH + ".tmp"
+
     while not stop_evt.is_set():
         with SCREENSHOT_LOCK:
-            take_screenshot(SCREENSHOT_PATH)
+            proc = subprocess.run(
+                [ADB_CMD, "exec-out", "screencap", "-p"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False
+            )
+            if proc.returncode == 0:
+                with open(tmp_path, "wb") as f:
+                    f.write(proc.stdout)
+                os.replace(tmp_path, SCREENSHOT_PATH)  # atomico
         time.sleep(CHECK_INTERVAL_SEC)
 
 def load_image(path: str):
@@ -308,108 +323,105 @@ def treasure_watcher(stop_evt: threading.Event):
 # ============================================================
 # THREAD 2: HEAL AUTOMATION
 # ============================================================
+def heal_icon_watcher(stop_evt):
+    templates = load_templates_from_dir(TEMPLATES_HEAL_DIR)
 
-def heal_watcher(stop_evt: threading.Event):
-    heal_templates = load_templates_from_dir(TEMPLATES_HEAL_DIR)
-    help_templates = load_templates_from_dir(TEMPLATES_HELP_DIR)
-    heal_finished_templates = load_templates_from_dir(HEAL_FINISHED_DIR)
-
-    if not heal_templates:
-        print("[!] Nessun template heal. Thread heal si ferma.")
-        return
-
-    # help templates possono anche mancare: in quel caso facciamo solo heal
     while not stop_evt.is_set():
-        with SCREENSHOT_LOCK:
-            img = load_image(SCREENSHOT_PATH)
-
+        img = load_image(SCREENSHOT_PATH)
         if img is None:
-            heal_sleep(1.0)
+            time.sleep(1)
             continue
 
-        roi_f, coords_f = crop_roi(img, HEAL_ICON_ROI)
-    
-        name_f, score_f, loc_f, hw_f = match_any(roi_f, heal_finished_templates)
-    
-        if score_f >= MATCH_THRESHOLD_HEAL:
-            log_event(f"[HEAL] heal finished detected ({name_f}) score={score_f:.3f}")
-            tap_match_in_fullscreen(coords_f, loc_f, hw_f)
-            heal_sleep(HEAL_DELAY_MULTIPLIER)
-            continue
+        roi, coords = crop_roi(img, HEAL_ICON_ROI)
+        name, score, loc, hw = match_any(roi, templates)
 
-        snap_path = os.path.join(DEBUG_DIR, "screen_heal.png")
-        if not take_screenshot(snap_path):
-            heal_sleep(HEAL_DELAY_MULTIPLIER)
-            continue
+        if score >= MATCH_THRESHOLD_HEAL:
+            cx, cy = tap_match_in_fullscreen(coords, loc, hw)
+            log_event(f"[HEAL] tap heal_icon @ {cx},{cy}")
+            time.sleep(2)  # debounce minimo
 
-        img = load_image(snap_path)
+        time.sleep(1)
+
+def hospital_watcher(stop_evt):
+    templates = load_templates_from_dir("hospital")
+
+    while not stop_evt.is_set():
+        img = load_image(SCREENSHOT_PATH)
         if img is None:
-            heal_sleep(HEAL_DELAY_MULTIPLIER)
+            time.sleep(1)
             continue
 
-        # 1) cerca icona heal sulla mappa
-        roi_map, coords_map = crop_roi(img, HEAL_ICON_ROI)
-        name, score, loc, hw = match_any(roi_map, heal_templates)
+        roi, coords = crop_roi(img, HOSPITAL_BANNER_ROI)
+        name, score, loc, hw = match_any(roi, templates)
+
         if not DEBUG_EVENTS_ONLY:
-            log_event(f"[HEAL] heal_icon best={name} score={score:.3f} thr={MATCH_THRESHOLD_HEAL}")
+            log_event(f"[HOSPITAL] best={name} score={score:.3f}")
 
-        if score < MATCH_THRESHOLD_HEAL:
-            time.sleep(5)
+        if score >= 0.5:
+            # 1) tap label numerica prima riga
+            xs, ys, xe, ye = crop_roi(img, HOSPITAL_FIRST_ROW_NUMBER_LABEL_ROI)[1]
+            adb_tap((xs + xe)//2, (ys + ye)//2)
+            log_event("[HOSPITAL] tap number label")
+
+            time.sleep(1)
+
+            # 2) inserisci batch
+            adb_input_text(str(HEAL_BATCH_DEFAULT))
+            adb_keyevent(66)
+            log_event(f"[HOSPITAL] input batch={HEAL_BATCH_DEFAULT}")
+
+            time.sleep(1)
+
+            # 3) tap bottone Heal (zona fissa)
+            adb_tap(
+                int(img.shape[1] * 0.83),
+                int(img.shape[0] * 0.86)
+            )
+            log_event("[HOSPITAL] tap HEAL button")
+
+            time.sleep(3)
+
+        time.sleep(1)
+
+def help_heal_watcher(stop_evt):
+    templates = load_templates_from_dir(TEMPLATES_HELP_DIR)
+    last_tap = 0
+
+    while not stop_evt.is_set():
+        img = load_image(SCREENSHOT_PATH)
+        if img is None:
+            time.sleep(1)
             continue
 
-        # click icona heal
-        cx, cy = tap_match_in_fullscreen(coords_map, loc, hw)
-        log_event(f"[HEAL] tap heal_icon @ {cx},{cy}")
-        heal_sleep(HEAL_DELAY_MULTIPLIER)
+        roi, coords = crop_roi(img, HELP_ICON_ROI)
+        name, score, loc, hw = match_any(roi, templates)
 
-        # 2) dentro ospedale: tap sulla label numerica (prima riga) per aprire tastiera
-        snap_hosp = os.path.join(DEBUG_DIR, "screen_hospital.png")
-        take_screenshot(snap_hosp)
-        img_h = load_image(snap_hosp)
-        if img_h is None:
-            heal_sleep(HEAL_DELAY_MULTIPLIER) 
+        now = time.time()
+        if score >= MATCH_THRESHOLD_HELP and now - last_tap > 10:
+            cx, cy = tap_match_in_fullscreen(coords, loc, hw)
+            log_event(f"[HELP] tap heal help @ {cx},{cy}")
+            last_tap = now
+
+        time.sleep(1)
+
+def heal_finished_watcher(stop_evt):
+    templates = load_templates_from_dir(HEAL_FINISHED_DIR)
+
+    while not stop_evt.is_set():
+        img = load_image(SCREENSHOT_PATH)
+        if img is None:
+            time.sleep(1)
             continue
 
-        roi_label, coords_label = crop_roi(img_h, HOSPITAL_FIRST_ROW_NUMBER_LABEL_ROI)
+        roi, coords = crop_roi(img, HEAL_ICON_ROI)
+        name, score, loc, hw = match_any(roi, templates)
 
-        # tap al centro della ROI label (non template: è “zona fissa” che vuoi)
-        xs, ys, xe, ye = coords_label
-        adb_tap((xs + xe) // 2, (ys + ye) // 2)
-        print("[HEAL] tap number label (keyboard open)")
-        heal_sleep(HEAL_DELAY_MULTIPLIER)
+        if score >= MATCH_THRESHOLD_HEAL:
+            cx, cy = tap_match_in_fullscreen(coords, loc, hw)
+            log_event(f"[HEAL] finished, tap @ {cx},{cy}")
+            time.sleep(3)
 
-        # inserisci batch
-        adb_input_text(str(HEAL_BATCH_DEFAULT))
-        time.sleep(0.3)
-        adb_keyevent(66)  # ENTER = OK (spesso funziona)
-        log_event(f"[HEAL] input batch={HEAL_BATCH_DEFAULT} + ENTER")
-        heal_sleep(HEAL_DELAY_MULTIPLIER)
-
-        # torna indietro alla mappa
-        # adb_keyevent(4)  # BACK
-        adb_tap(int(img.shape[1] * 0.83), int(img.shape[0] * 0.86))
-        heal_sleep(HEAL_DELAY_MULTIPLIER)
-
-        # 3) cerca icona help e cliccala (se hai template)
-        if help_templates:
-            snap_help = os.path.join(DEBUG_DIR, "screen_help.png")
-            img2 = load_image(snap_help)
-            if img2 is not None:
-                roi_help, coords_help = crop_roi(img2, HELP_ICON_ROI)
-                if DEBUG_SAVE_ROIS:
-                    cv2.imwrite(os.path.join(DEBUG_DIR, "roi_help_icon.png"), roi_help)
-
-                n2, s2, loc2, hw2 = match_any(roi_help, help_templates)
-                if not DEBUG_EVENTS_ONLY:
-                    log_event(f"[HEAL] help_icon best={n2} score={s2:.3f} thr={MATCH_THRESHOLD_HELP}")
-
-                if s2 >= MATCH_THRESHOLD_HELP:
-                    cx2, cy2 = tap_match_in_fullscreen(coords_help, loc2, hw2)
-                    log_event(f"[HEAL] tap help_icon @ {cx2},{cy2}")
-                    heal_sleep(HEAL_DELAY_MULTIPLIER)
-
-        # 4) aspetta un po’ prima del prossimo ciclo
-        heal_sleep(HEAL_DELAY_MULTIPLIER)
+        time.sleep(1)
 
 # ============================================================
 # THREAD 3: HELP-COLLEAGUE AUTOMATION
@@ -550,15 +562,21 @@ def main():
 
     t0 = threading.Thread(target=screenshot_producer, args=(stop_evt,), daemon=True )
     t1 = threading.Thread(target=treasure_watcher, args=(stop_evt,), daemon=True)
-    t2 = threading.Thread(target=heal_watcher, args=(stop_evt,), daemon=True)
-    t3 = threading.Thread(target=help_colleague_watcher, args=(stop_evt,), daemon=True)
-    t4 = threading.Thread(target=hq_upgrade_watcher, args=(stop_evt,), daemon=True ) 
+    t2 = threading.Thread( target=heal_icon_watcher, args=(stop_evt,), daemon=True ) 
+    t3 = threading.Thread( target=hospital_watcher, args=(stop_evt,), daemon=True ) 
+    t4 = threading.Thread( target=help_heal_watcher, args=(stop_evt,), daemon=True ) 
+    t5 = threading.Thread( target=heal_finished_watcher, args=(stop_evt,), daemon=True ) 
+    t6 = threading.Thread( target=help_colleague_watcher, args=(stop_evt,), daemon=True ) 
+    t7 = threading.Thread( target=hq_upgrade_watcher, args=(stop_evt,), daemon=True )
 
     t0.start()
     t1.start()
     t2.start()
     t3.start()
     t4.start()
+    t5.start()
+    t6.start()
+    t7.start()
 
     try:
         while True:
