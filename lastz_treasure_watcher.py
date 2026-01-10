@@ -26,9 +26,10 @@ DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1446565181265154190/pL-0
 CHECK_INTERVAL_SEC = 3
 
 # Template match threshold
-MATCH_THRESHOLD_TREASURE = 0.50
-MATCH_THRESHOLD_HEAL     = 0.55
+MATCH_THRESHOLD_TREASURE = 0.55
+MATCH_THRESHOLD_HEAL     = 0.65
 MATCH_THRESHOLD_HELP     = 0.40
+MATCH_THRESHOLD_HOSPITAL = 0.60
 
 # Anti-spam alert
 MIN_SECONDS_BETWEEN_TREASURE_ALERTS = 600  # 10 min
@@ -43,7 +44,7 @@ DEBUG_DIR               = "debug"
 os.makedirs(DEBUG_DIR, exist_ok=True)
 
 # Heal config
-HEAL_BATCH_DEFAULT = 60
+HEAL_BATCH_DEFAULT = 50
 HEAL_DELAY_MULTIPLIER = 0.7
 HEAL_FINISHED = os.path.join(HEAL_FINISHED_DIR, "screen_heal_loop.png")
 
@@ -94,7 +95,7 @@ HOSPITAL_BANNER_ROI = (0.0, 1.0, 0.0, 0.22)
 
 DEBUG_SAVE_SCREENSHOTS = False   # salva screen interi
 DEBUG_SAVE_ROIS        = True    # salva le ROI ritagliate
-DEBUG_EVENTS_ONLY      = True    # scrive solo quando riconosce un evento
+DEBUG_EVENTS_ONLY      = True  # scrive solo quando riconosce un evento
 
 
 # ============================================================
@@ -312,7 +313,7 @@ def treasure_watcher(stop_evt: threading.Event):
 
         now = time.time()
         if hits >= CONSECUTIVE_HITS_REQUIRED_TREASURE and (now - last_alert) >= MIN_SECONDS_BETWEEN_TREASURE_ALERTS:
-            log_event(f"[TREASURE] RILEVATO {name} score={score:.3f}")
+            log_event(f"[TREASURE] RILEVATO {name} score={score:.3f} thr={MATCH_THRESHOLD_TREASURE}")
             send_notification(f"🎁 Tesoro rilevato! ({name}) score={score:.2f}")
             last_alert = now
             hits = 0
@@ -337,7 +338,7 @@ def heal_icon_watcher(stop_evt):
 
         if score >= MATCH_THRESHOLD_HEAL:
             cx, cy = tap_match_in_fullscreen(coords, loc, hw)
-            log_event(f"[HEAL] tap heal_icon @ {cx},{cy}")
+            log_event(f"[HEAL] score={score:.3f} ≥ thr={MATCH_THRESHOLD_HEAL:.2f} tap heal_icon @ {cx},{cy}")
             time.sleep(2)  # debounce minimo
 
         time.sleep(1)
@@ -355,13 +356,13 @@ def hospital_watcher(stop_evt):
         name, score, loc, hw = match_any(roi, templates)
 
         if not DEBUG_EVENTS_ONLY:
-            log_event(f"[HOSPITAL] best={name} score={score:.3f}")
+            log_event(f"[HOSPITAL] best={name} score={score:.3f} thr={MATCH_THRESHOLD_HOSPITAL:.2f}")
 
-        if score >= 0.5:
+        if score >= MATCH_THRESHOLD_HOSPITAL:
             # 1) tap label numerica prima riga
             xs, ys, xe, ye = crop_roi(img, HOSPITAL_FIRST_ROW_NUMBER_LABEL_ROI)[1]
             adb_tap((xs + xe)//2, (ys + ye)//2)
-            log_event("[HOSPITAL] tap number label")
+            log_event(f"[HOSPITAL] score={score:.3f} ≥ thr={MATCH_THRESHOLD_HOSPITAL:.2f} tap number label")
 
             time.sleep(1)
 
@@ -399,7 +400,7 @@ def help_heal_watcher(stop_evt):
         now = time.time()
         if score >= MATCH_THRESHOLD_HELP and now - last_tap > 10:
             cx, cy = tap_match_in_fullscreen(coords, loc, hw)
-            log_event(f"[HELP-HEAL] tap heal help @ {cx},{cy}")
+            log_event(f"[HELP-HEAL] score={score:.3f} ≥ thr={MATCH_THRESHOLD_HEAL:.2f} tap heal help @ {cx},{cy}")
             last_tap = now
 
         time.sleep(1)
@@ -449,7 +450,7 @@ def help_colleague_watcher(stop_evt: threading.Event):
 
         name, score, loc, hw = match_any(roi, templates)
         if not DEBUG_EVENTS_ONLY:
-            log_event(f"[HELP-COLLEAGUE] best={name} score={score:.3f}")
+            log_event(f"[HELP-COLLEAGUE] best={name} score={score:.3f} thr={MATCH_THRESHOLD_HEAL:.2f}")
 
         now = time.time()
         if score >= MATCH_THRESHOLD_HELP_COLLEAGUE and (now - last_click) >= HELP_COLLEAGUE_COOLDOWN:
