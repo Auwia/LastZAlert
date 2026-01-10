@@ -399,7 +399,7 @@ def help_heal_watcher(stop_evt):
         now = time.time()
         if score >= MATCH_THRESHOLD_HELP and now - last_tap > 10:
             cx, cy = tap_match_in_fullscreen(coords, loc, hw)
-            log_event(f"[HELP] tap heal help @ {cx},{cy}")
+            log_event(f"[HELP-HEAL] tap heal help @ {cx},{cy}")
             last_tap = now
 
         time.sleep(1)

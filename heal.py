@@ -22,16 +22,16 @@ PACKAGE_NAME = "com.readygo.barrel.gp"
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1446565181265154190/pL-0gcgP09RlQqnqHqQDIdQqm505tqa744is2R_1eGA3Had4OXmhPgQrTLYXYzaMld0S"
 
 # Loop timing
-CHECK_INTERVAL_SEC = 8
+CHECK_INTERVAL_SEC = 2
 
 # Template match threshold
-MATCH_THRESHOLD_TREASURE = 0.40
-MATCH_THRESHOLD_HEAL     = 0.50
-MATCH_THRESHOLD_HELP     = 0.40
+MATCH_THRESHOLD_TREASURE = 0.70
+MATCH_THRESHOLD_HEAL     = 0.60
+MATCH_THRESHOLD_HELP     = 0.45
 
 # Anti-spam alert
-MIN_SECONDS_BETWEEN_TREASURE_ALERTS = 600  # 10 min
-CONSECUTIVE_HITS_REQUIRED_TREASURE = 3
+MIN_SECONDS_BETWEEN_TREASURE_ALERTS = 5 
+CONSECUTIVE_HITS_REQUIRED_TREASURE = 1
 
 # Paths
 TEMPLATES_TREASURES_DIR = "treasures"
@@ -42,7 +42,7 @@ DEBUG_DIR               = "debug"
 os.makedirs(DEBUG_DIR, exist_ok=True)
 
 # Heal config
-HEAL_BATCH_DEFAULT = 50
+HEAL_BATCH_DEFAULT = 100
 HEAL_DELAY_MULTIPLIER = 0.7
 HEAL_FINISHED = os.path.join(HEAL_FINISHED_DIR, "screen_heal_loop.png")
 
@@ -50,7 +50,7 @@ HEAL_FINISHED = os.path.join(HEAL_FINISHED_DIR, "screen_heal_loop.png")
 HELP_COLLEAGUE_ROI = (0.74, 0.86, 0.70, 0.86)
 TEMPLATES_HELP_COLLEAGUE_DIR = "colleague"
 MATCH_THRESHOLD_HELP_COLLEAGUE = 0.35
-HELP_COLLEAGUE_COOLDOWN = 20  # secondi
+HELP_COLLEAGUE_COOLDOWN = 2  # secondi
 
 # ============================================================
 # ROI (FRAZIONI dello schermo: x1,x2,y1,y2)
@@ -74,8 +74,8 @@ HOSPITAL_FIRST_ROW_NUMBER_LABEL_ROI = (0.78, 0.93, 0.33, 0.42)
 # Debug
 # ============================================================
 
-DEBUG_SAVE_SCREENSHOTS = True   # salva screen interi
-DEBUG_SAVE_ROIS        = True   # salva le ROI ritagliate
+DEBUG_SAVE_SCREENSHOTS = False   # salva screen interi
+DEBUG_SAVE_ROIS        = False   # salva le ROI ritagliate
 
 
 # ============================================================
