@@ -7,6 +7,9 @@ from datetime import datetime
 import subprocess
 import threading
 from typing import List, Tuple, Optional
+from simple_events import SIMPLE_EVENTS
+from treasure_flow import treasure_flow_watcher
+from workflow_manager import WORKFLOW_MANAGER, Workflow
 
 import cv2
 import numpy as np
@@ -22,18 +25,17 @@ PACKAGE_NAME = "com.readygo.barrel.gp"
 # Discord webhook (ATTENZIONE: se pubblico, meglio metterlo in env var)
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1446565181265154190/pL-0gcgP09RlQqnqHqQDIdQqm505tqa744is2R_1eGA3Had4OXmhPgQrTLYXYzaMld0S"
 
-# Loop timing
-CHECK_INTERVAL_SEC = 3
-
 # Template match threshold
-MATCH_THRESHOLD_TREASURE = 0.55
-MATCH_THRESHOLD_HEAL     = 0.65
-MATCH_THRESHOLD_HELP     = 0.40
-MATCH_THRESHOLD_HOSPITAL = 0.60
+MATCH_THRESHOLD_TREASURE = 0.75
+MATCH_THRESHOLD_HEAL     = 0.85
+MATCH_THRESHOLD_HELP     = 0.80
+MATCH_THRESHOLD_HOSPITAL = 0.85
+last_hospital_action = 0
+HOSPITAL_COOLDOWN = 5  # secondi
 
 # Anti-spam alert
-MIN_SECONDS_BETWEEN_TREASURE_ALERTS = 600  # 10 min
-CONSECUTIVE_HITS_REQUIRED_TREASURE = 3
+MIN_SECONDS_BETWEEN_TREASURE_ALERTS = 2  # 10 min
+CONSECUTIVE_HITS_REQUIRED_TREASURE = 1
 
 # Paths
 TEMPLATES_TREASURES_DIR = "treasures"
@@ -44,29 +46,27 @@ DEBUG_DIR               = "debug"
 os.makedirs(DEBUG_DIR, exist_ok=True)
 
 # Heal config
-HEAL_BATCH_DEFAULT = 50
-HEAL_DELAY_MULTIPLIER = 0.7
-HEAL_FINISHED = os.path.join(HEAL_FINISHED_DIR, "screen_heal_loop.png")
-
-# Help colleague config
-HELP_COLLEAGUE_ROI = (0.74, 0.86, 0.70, 0.86)
-TEMPLATES_HELP_COLLEAGUE_DIR = "colleague"
-MATCH_THRESHOLD_HELP_COLLEAGUE = 0.31
-HELP_COLLEAGUE_COOLDOWN = 20  # secondi
+HEAL_BATCH_DEFAULT = 150
+HEAL_BATCH_ALREADY_SET = False
 
 # HQ upgrade
 TEMPLATES_HQ_UPGRADE_DIR = "hq_upgrade"
 MATCH_THRESHOLD_HQ = 0.55
-HQ_COOLDOWN = 15
+HQ_COOLDOWN = 5
 last_hq_action = 0
-HQ_BUBBLE_ROI  = (0.05, 0.40, 0.15, 0.55)   # chat area
+HQ_BUBBLE_ROI  = (0.50, 0.82, 0.84, 0.97)   # chat area
 HQ_GIFT_ROI    = (0.15, 0.85, 0.20, 0.70)   # banner centrale
 HQ_OPEN_ROI    = (0.30, 0.70, 0.45, 0.80)   # bottone Open
 HQ_CONFIRM_ROI = (0.25, 0.75, 0.60, 0.90)   # bottone Confirm
 
 # Screenshot condiviso (riuso screen_treasure.png come "shared frame")
+CHECK_INTERVAL_SEC = 1
 SCREENSHOT_PATH = os.path.join(DEBUG_DIR, "screen_treasure.png")
+SCREENSHOT_ERROR_COUNT = 0
+SCREENSHOT_ERROR_MAX = 3
 SCREENSHOT_LOCK = threading.Lock()
+
+TREASURE_FLOW_EVENT = threading.Event()
 
 # ============================================================
 # ROI (FRAZIONI dello schermo: x1,x2,y1,y2)
@@ -74,13 +74,12 @@ SCREENSHOT_LOCK = threading.Lock()
 # ============================================================
 
 # Tesoro: area basso-destra dove appare l’icona tesoro
+#TREASURE_ROI = (0.0, 1.0, 0.0, 1.0)
 TREASURE_ROI = (0.50, 0.82, 0.84, 0.97)
 
-# Heal icon: nuvoletta croce rossa di solito sopra ospedale (zona centrale)
-HEAL_ICON_ROI = (0.30, 0.70, 0.40, 0.75)
 
-# Help icon: dove appare l’icona “stretta di mano” (spesso vicino ospedale/icone varie)
-HELP_ICON_ROI = (0.30, 0.80, 0.40, 0.85)
+# Heal icon: nuvoletta croce rossa di solito sopra ospedale (zona centrale)
+HEAL_ICON_ROI = (0.0, 1.0, 0.0, 1.0)
 
 # Dentro ospedale: prima riga campo numero (label su cui tappare per aprire tastiera)
 # Metti qui la zona della label numerica della PRIMA RIGA (Shock Cavalry)
@@ -101,6 +100,29 @@ DEBUG_EVENTS_ONLY      = True  # scrive solo quando riconosce un evento
 # ============================================================
 # UTIL
 # ============================================================
+ADB_DEVICE = "192.168.0.95:5555" 
+
+def reset_adb():
+    try:
+        print("[ADB] killing server")
+        subprocess.run([ADB_CMD, "kill-server"], timeout=5)
+        time.sleep(2)
+
+        print("[ADB] starting server")
+        subprocess.run([ADB_CMD, "start-server"], timeout=5)
+        time.sleep(2)
+
+        print(f"[ADB] reconnecting to {ADB_DEVICE}")
+        subprocess.run([ADB_CMD, "connect", ADB_DEVICE], timeout=10)
+        time.sleep(2)
+
+        print("[ADB] waiting for device")
+        subprocess.run([ADB_CMD, "wait-for-device"], timeout=10)
+
+        print("[ADB] device reconnected")
+
+    except Exception as e:
+        print("[ADB] reset failed:", e)
 
 def log_event(msg: str):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -155,21 +177,46 @@ def take_screenshot(path: str) -> bool:
         return False
 
 def screenshot_producer(stop_evt: threading.Event):
+    global SCREENSHOT_ERROR_COUNT
     tmp_path = SCREENSHOT_PATH + ".tmp"
 
     while not stop_evt.is_set():
-        with SCREENSHOT_LOCK:
-            proc = subprocess.run(
-                [ADB_CMD, "exec-out", "screencap", "-p"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=30,
-                check=False
-            )
-            if proc.returncode == 0:
-                with open(tmp_path, "wb") as f:
-                    f.write(proc.stdout)
-                os.replace(tmp_path, SCREENSHOT_PATH)  # atomico
+        try:
+            with SCREENSHOT_LOCK:
+                proc = subprocess.run(
+                    [ADB_CMD, "exec-out", "screencap", "-p"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=10,          # ⬅ riduci
+                    check=False
+                )
+
+                if proc.returncode != 0 or not proc.stdout:
+                    err = proc.stderr.decode(errors="ignore")
+                    print("[SCREENSHOT] screencap failed:", err)
+                    SCREENSHOT_ERROR_COUNT += 1
+
+                    if "error: closed" in err.lower():
+                        SCREENSHOT_ERROR_COUNT = SCREENSHOT_ERROR_MAX
+                else:
+                    SCREENSHOT_ERROR_COUNT = 0
+                    with open(tmp_path, "wb") as f:
+                        f.write(proc.stdout)
+                    os.replace(tmp_path, SCREENSHOT_PATH)
+
+        except subprocess.TimeoutExpired:
+            print("[SCREENSHOT] adb screencap TIMEOUT – retry")
+            SCREENSHOT_ERROR_COUNT += 1
+
+        except Exception as e:
+            print("[SCREENSHOT] exception:", e)
+            SCREENSHOT_ERROR_COUNT += 1
+
+        if SCREENSHOT_ERROR_COUNT >= SCREENSHOT_ERROR_MAX:
+            print("[SCREENSHOT] troppi errori → reset adb")
+            reset_adb()
+            SCREENSHOT_ERROR_COUNT = 0
+
         time.sleep(CHECK_INTERVAL_SEC)
 
 def load_image(path: str):
@@ -315,41 +362,39 @@ def treasure_watcher(stop_evt: threading.Event):
         if hits >= CONSECUTIVE_HITS_REQUIRED_TREASURE and (now - last_alert) >= MIN_SECONDS_BETWEEN_TREASURE_ALERTS:
             log_event(f"[TREASURE] RILEVATO {name} score={score:.3f} thr={MATCH_THRESHOLD_TREASURE}")
             send_notification(f"🎁 Tesoro rilevato! ({name}) score={score:.2f}")
+
+            WORKFLOW_MANAGER.force(Workflow.TREASURE)
+
+            if WORKFLOW_MANAGER.acquire(Workflow.TREASURE):
+                # 0) TAP sul tesoro appena rilevato (apre la chat)
+                cx, cy = tap_match_in_fullscreen(coords, loc, hw)
+                log_event(f"[TREASURE] tap icon @ {cx},{cy} -> open chat")
+
+            TREASURE_FLOW_EVENT.set()
+
+            WORKFLOW_MANAGER.preempt_lower_priority(Workflow.TREASURE)
+
+            treasure_flow_watcher.flow.trigger()
+
             last_alert = now
             hits = 0
 
         time.sleep(CHECK_INTERVAL_SEC)
 
-
-# ============================================================
-# THREAD 2: HEAL AUTOMATION
-# ============================================================
-def heal_icon_watcher(stop_evt):
-    templates = load_templates_from_dir(TEMPLATES_HEAL_DIR)
-
-    while not stop_evt.is_set():
-        img = load_image(SCREENSHOT_PATH)
-        if img is None:
-            time.sleep(1)
-            continue
-
-        roi, coords = crop_roi(img, HEAL_ICON_ROI)
-        name, score, loc, hw = match_any(roi, templates)
-
-        if score >= MATCH_THRESHOLD_HEAL:
-            cx, cy = tap_match_in_fullscreen(coords, loc, hw)
-            log_event(f"[HEAL] score={score:.3f} ≥ thr={MATCH_THRESHOLD_HEAL:.2f} tap heal_icon @ {cx},{cy}")
-            time.sleep(2)  # debounce minimo
-
-        time.sleep(1)
-
 def hospital_watcher(stop_evt):
+    global last_hospital_action
+    global HEAL_BATCH_ALREADY_SET
+
     templates = load_templates_from_dir("hospital")
 
     while not stop_evt.is_set():
+        if not WORKFLOW_MANAGER.can_run(Workflow.HEAL):
+            time.sleep(0.5)
+            continue
+
         img = load_image(SCREENSHOT_PATH)
         if img is None:
-            time.sleep(1)
+            time.sleep(0.5)
             continue
 
         roi, coords = crop_roi(img, HOSPITAL_BANNER_ROI)
@@ -359,111 +404,51 @@ def hospital_watcher(stop_evt):
             log_event(f"[HOSPITAL] best={name} score={score:.3f} thr={MATCH_THRESHOLD_HOSPITAL:.2f}")
 
         if score >= MATCH_THRESHOLD_HOSPITAL:
+            now = time.time()
+            if now - last_hospital_action < HOSPITAL_COOLDOWN:
+                time.sleep(0.5)
+                continue
+
+            if not WORKFLOW_MANAGER.acquire(Workflow.HEAL):
+                continue
+
+            last_hospital_action = now
+
             # 1) tap label numerica prima riga
-            xs, ys, xe, ye = crop_roi(img, HOSPITAL_FIRST_ROW_NUMBER_LABEL_ROI)[1]
-            adb_tap((xs + xe)//2, (ys + ye)//2)
-            log_event(f"[HOSPITAL] score={score:.3f} ≥ thr={MATCH_THRESHOLD_HOSPITAL:.2f} tap number label")
+            if not HEAL_BATCH_ALREADY_SET:
+                xs, ys, xe, ye = crop_roi(img, HOSPITAL_FIRST_ROW_NUMBER_LABEL_ROI)[1]
+                adb_tap((xs + xe)//2, (ys + ye)//2)
+                log_event(f"[HOSPITAL] first heal → tap number label")
+            
+                time.sleep(1)
 
-            time.sleep(1)
+                # 2) inserisci batch
+                adb_input_text(str(HEAL_BATCH_DEFAULT))
+                adb_keyevent(66)
+                log_event(f"[HOSPITAL] input batch={HEAL_BATCH_DEFAULT}")
+                time.sleep(0.5)
 
-            # 2) inserisci batch
-            adb_input_text(str(HEAL_BATCH_DEFAULT))
-            adb_keyevent(66)
-            log_event(f"[HOSPITAL] input batch={HEAL_BATCH_DEFAULT}")
-
-            time.sleep(1)
+                HEAL_BATCH_ALREADY_SET = True
+                log_event("[HOSPITAL] batch set complete, next heals will skip input")
 
             # 3) tap bottone Heal (zona fissa)
-            adb_tap(
-                int(img.shape[1] * 0.83),
-                int(img.shape[0] * 0.86)
-            )
+            heal_x = int(img.shape[1] * 0.83)
+            heal_y = int(img.shape[0] * 0.86)
+            adb_tap(heal_x, heal_y)
             log_event("[HOSPITAL] tap HEAL button")
 
-            time.sleep(3)
+            time.sleep(0.5)
 
-        time.sleep(1)
+            WORKFLOW_MANAGER.release(Workflow.HEAL)
 
-def help_heal_watcher(stop_evt):
-    templates = load_templates_from_dir(TEMPLATES_HELP_DIR)
-    last_tap = 0
-
-    while not stop_evt.is_set():
-        img = load_image(SCREENSHOT_PATH)
-        if img is None:
-            time.sleep(1)
-            continue
-
-        roi, coords = crop_roi(img, HELP_ICON_ROI)
-        name, score, loc, hw = match_any(roi, templates)
-
-        now = time.time()
-        if score >= MATCH_THRESHOLD_HEAL and now - last_tap > 10:
-            cx, cy = tap_match_in_fullscreen(coords, loc, hw)
-            log_event(f"[HELP-HEAL] score={score:.3f} ≥ thr={MATCH_THRESHOLD_HEAL:.2f} tap heal help @ {cx},{cy}")
-            last_tap = now
-
-        time.sleep(1)
-
-def heal_finished_watcher(stop_evt):
-    templates = load_templates_from_dir(HEAL_FINISHED_DIR)
-
-    while not stop_evt.is_set():
-        img = load_image(SCREENSHOT_PATH)
-        if img is None:
-            time.sleep(1)
-            continue
-
-        roi, coords = crop_roi(img, HEAL_ICON_ROI)
-        name, score, loc, hw = match_any(roi, templates)
-
-        if score >= MATCH_THRESHOLD_HEAL:
-            cx, cy = tap_match_in_fullscreen(coords, loc, hw)
-            log_event(f"[HEAL] finished, tap @ {cx},{cy}")
-            time.sleep(3)
-
-        time.sleep(1)
-
-# ============================================================
-# THREAD 3: HELP-COLLEAGUE AUTOMATION
-# ============================================================
-def help_colleague_watcher(stop_evt: threading.Event):
-    templates = load_templates_from_dir(TEMPLATES_HELP_COLLEAGUE_DIR)
-    if not templates:
-        print("[HELP-COLLEAGUE] Nessun template, thread fermo.")
-        return
-
-    last_click = 0.0
-
-    while not stop_evt.is_set():
-        with SCREENSHOT_LOCK:
-            img = load_image(SCREENSHOT_PATH)
-
-        if img is None:
-            time.sleep(CHECK_INTERVAL_SEC)
-            continue
-
-        roi, coords = crop_roi(img, HELP_COLLEAGUE_ROI)
-
-        if DEBUG_SAVE_ROIS:
-            cv2.imwrite(os.path.join(DEBUG_DIR, "roi_help_colleague.png"), roi)
-
-        name, score, loc, hw = match_any(roi, templates)
-        if not DEBUG_EVENTS_ONLY:
-            log_event(f"[HELP-COLLEAGUE] best={name} score={score:.3f} thr={MATCH_THRESHOLD_HEAL:.2f}")
-
-        now = time.time()
-        if score >= MATCH_THRESHOLD_HELP_COLLEAGUE and (now - last_click) >= HELP_COLLEAGUE_COOLDOWN:
-            cx, cy = tap_match_in_fullscreen(coords, loc, hw)
-            log_event(f"[HELP-COLLEAGUE] tap @ {cx},{cy}")
-            last_click = now
-
-        time.sleep(CHECK_INTERVAL_SEC)
+        time.sleep(0.5)
 
 # ============================================================
 # THREAD 4: HQ Upgrade Gift automation
 # ============================================================
 def hq_upgrade_watcher(stop_evt: threading.Event):
+    global last_hq_action
+
     templates = load_templates_from_dir(TEMPLATES_HQ_UPGRADE_DIR)
     if not templates:
         print("[HQ] Nessun template, thread fermo.")
@@ -486,6 +471,9 @@ def hq_upgrade_watcher(stop_evt: threading.Event):
             name, score, loc, hw = match_any(roi, templates)
     
             if score >= MATCH_THRESHOLD_HQ and "bubble" in name.lower():
+                if not WORKFLOW_MANAGER.can_run(Workflow.HQ):
+                    time.sleep(0.5)
+                    continue
                 if name is None:
                     continue
                 now = time.time()
@@ -504,6 +492,9 @@ def hq_upgrade_watcher(stop_evt: threading.Event):
         # STATE: CHAT_OPENED → gift
         # ---------------------------
         if hq_state == "CHAT_OPENED":
+            if WORKFLOW_MANAGER.acquire(Workflow.HQ):
+                print("[WF] HQ acquisito")
+
             roi, coords = crop_roi(img, HQ_GIFT_ROI)
             name, score, loc, hw = match_any(roi, templates)
     
@@ -514,12 +505,17 @@ def hq_upgrade_watcher(stop_evt: threading.Event):
                 time.sleep(2)
             else:
                 hq_state = "IDLE"
+                WORKFLOW_MANAGER.release(Workflow.HQ)
+                print("[WF] HQ rilasciato")
             continue
     
         # ---------------------------
         # STATE: GIFT_OPENED → open
         # ---------------------------
         if hq_state == "GIFT_OPENED":
+            if WORKFLOW_MANAGER.acquire(Workflow.HQ):
+                print("[WF] HQ acquisito")
+
             roi, coords = crop_roi(img, HQ_OPEN_ROI)
             name, score, loc, hw = match_any(roi, templates)
     
@@ -530,12 +526,17 @@ def hq_upgrade_watcher(stop_evt: threading.Event):
                 time.sleep(2)
             else:
                 hq_state = "IDLE"
+                WORKFLOW_MANAGER.release(Workflow.HQ)
+                print("[WF] HQ rilasciato")
             continue
     
         # ---------------------------
         # STATE: WAIT_CONFIRM
         # ---------------------------
         if hq_state == "WAIT_CONFIRM":
+            if WORKFLOW_MANAGER.acquire(Workflow.HQ):
+                print("[WF] HQ acquisito")
+
             roi, coords = crop_roi(img, HQ_CONFIRM_ROI)
             name, score, loc, hw = match_any(roi, templates)
     
@@ -543,11 +544,65 @@ def hq_upgrade_watcher(stop_evt: threading.Event):
                 tap_match_in_fullscreen(coords, loc, hw)
                 print("[HQ] CONFIRM → DONE")
             hq_state = "IDLE"
+            WORKFLOW_MANAGER.release(Workflow.HQ)
+            print("[WF] HQ rilasciato")
+
             time.sleep(3)
             continue
 
 
         time.sleep(CHECK_INTERVAL_SEC)
+
+# ============================================================
+# THREAD 14: GENERIC 1-CLICK EVENTS AUTOMATION
+# ============================================================
+def simple_event_watcher(stop_evt):
+    # carica template per ogni evento UNA SOLA VOLTA
+    event_templates = {}
+    for name, cfg in SIMPLE_EVENTS.items():
+        templates = load_templates_from_dir(cfg["templates"])
+        if not templates:
+            log_event(f"[{name.upper()}] Nessun template, evento disabilitato")
+            continue
+        event_templates[name] = templates
+
+    last_fire = {name: 0.0 for name in event_templates}
+
+    while not stop_evt.is_set():
+        if not WORKFLOW_MANAGER.can_run(Workflow.GENERIC):
+            time.sleep(0.2)
+            continue
+
+        with SCREENSHOT_LOCK:
+            img = load_image(SCREENSHOT_PATH)
+
+        if img is None:
+            time.sleep(0.5)
+            continue
+
+        for name, templates in event_templates.items():
+            cfg = SIMPLE_EVENTS[name]
+            now = time.time()
+
+            if now - last_fire[name] < cfg["cooldown"]:
+                continue
+
+            roi_img, roi_coords = crop_roi(img, cfg["roi"])
+            name_t, score, loc, hw = match_any(roi_img, templates)
+
+            if not DEBUG_EVENTS_ONLY:
+                log_event(
+                    f"[{name.upper()}] best={name_t} "
+                    f"score={score:.3f} thr={cfg['threshold']:.2f}"
+                )
+
+            if score >= cfg["threshold"]:
+                cx, cy = tap_match_in_fullscreen(roi_coords, loc, hw)
+                log_event(f"[{name.upper()}] score: {score} treshould: {cfg["threshold"]} tap @ {cx},{cy}")
+                last_fire[name] = now
+                time.sleep(0.4)  # debounce
+
+        time.sleep(0.2)
 
 # ============================================================
 # MAIN
@@ -563,21 +618,17 @@ def main():
 
     t0 = threading.Thread(target=screenshot_producer, args=(stop_evt,), daemon=True )
     t1 = threading.Thread(target=treasure_watcher, args=(stop_evt,), daemon=True)
-    t2 = threading.Thread( target=heal_icon_watcher, args=(stop_evt,), daemon=True ) 
     t3 = threading.Thread( target=hospital_watcher, args=(stop_evt,), daemon=True ) 
-    t4 = threading.Thread( target=help_heal_watcher, args=(stop_evt,), daemon=True ) 
-    t5 = threading.Thread( target=heal_finished_watcher, args=(stop_evt,), daemon=True ) 
-    t6 = threading.Thread( target=help_colleague_watcher, args=(stop_evt,), daemon=True ) 
+    t5 = threading.Thread( target=treasure_flow_watcher, args=(stop_evt, SCREENSHOT_PATH, SCREENSHOT_LOCK, log_event), daemon=True ) 
     t7 = threading.Thread( target=hq_upgrade_watcher, args=(stop_evt,), daemon=True )
-
+    t14 = threading.Thread( target=simple_event_watcher, args=(stop_evt,), daemon=True )
+    
     t0.start()
     t1.start()
-    t2.start()
     t3.start()
-    t4.start()
     t5.start()
-    t6.start()
     t7.start()
+    t14.start()
 
     try:
         while True:
