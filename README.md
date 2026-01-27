@@ -10,4 +10,5 @@ sudo apt install python3-venv python3-full
 python3 -m venv venv
 source venv/bin/activate
 pip install opencv-python
+pip install easyocr
 
