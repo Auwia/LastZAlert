@@ -8,8 +8,9 @@ import subprocess
 import threading
 from typing import List, Tuple, Optional
 from simple_events import SIMPLE_EVENTS
-from treasure_flow import treasure_flow_watcher
+from treasure_flow import treasure_flow_watcher, TreasureFlow
 from workflow_manager import WORKFLOW_MANAGER, Workflow
+from donation_flow import DonationFlow
 
 import cv2
 import numpy as np
@@ -21,6 +22,10 @@ import requests
 
 ADB_CMD = "adb"
 PACKAGE_NAME = "com.readygo.barrel.gp"
+
+USE_SEQUENTIAL = True
+
+donation_flow_holder = {"flow": None}
 
 # Discord webhook (ATTENZIONE: se pubblico, meglio metterlo in env var)
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1446565181265154190/pL-0gcgP09RlQqnqHqQDIdQqm505tqa744is2R_1eGA3Had4OXmhPgQrTLYXYzaMld0S"
@@ -87,6 +92,11 @@ HOSPITAL_FIRST_ROW_NUMBER_LABEL_ROI = (0.78, 0.93, 0.33, 0.42)
 
 #HOSPITAL_BANNER_ROI = (0.25, 0.75, 0.02, 0.14)
 HOSPITAL_BANNER_ROI = (0.0, 1.0, 0.0, 0.22)
+
+ALLIANCE_ICON_ROI   = (0.85, 0.98, 0.75, 0.95)
+ALLIANCE_TECH_ROI = (0.05, 0.95, 0.25, 0.60)
+RECOMMENDED_ROI    = (0.25, 0.75, 0.20, 0.55)
+DONATE_BUTTON_ROI  = (0.20, 0.80, 0.70, 0.90)
 
 # ============================================================
 # Debug
@@ -181,6 +191,7 @@ def screenshot_producer(stop_evt: threading.Event):
     tmp_path = SCREENSHOT_PATH + ".tmp"
 
     while not stop_evt.is_set():
+        print("[SEQUENTIAL] Tick loop in esecuzione...")
         try:
             with SCREENSHOT_LOCK:
                 proc = subprocess.run(
@@ -568,15 +579,29 @@ def simple_event_watcher(stop_evt):
 
     last_fire = {name: 0.0 for name in event_templates}
 
+    GENERIC_GLOBAL_COOLDOWN = 10
+    last_generic_fire = 0.0
+
     while not stop_evt.is_set():
-        if not WORKFLOW_MANAGER.can_run(Workflow.GENERIC):
+        GENERIC_GLOBAL_COOLDOWN = 10
+        last_generic_fire = 0.0
+
+        now = time.time()
+        if now - last_generic_fire < GENERIC_GLOBAL_COOLDOWN:
+            time.sleep(0.5)
+            continue
+
+        if not WORKFLOW_MANAGER.acquire(Workflow.GENERIC):
             time.sleep(0.2)
             continue
+
+        did_anything = False
 
         with SCREENSHOT_LOCK:
             img = load_image(SCREENSHOT_PATH)
 
         if img is None:
+            WORKFLOW_MANAGER.release(Workflow.GENERIC)
             time.sleep(0.5)
             continue
 
@@ -598,11 +623,308 @@ def simple_event_watcher(stop_evt):
 
             if score >= cfg["threshold"]:
                 cx, cy = tap_match_in_fullscreen(roi_coords, loc, hw)
-                log_event(f"[{name.upper()}] score: {score} treshould: {cfg["threshold"]} tap @ {cx},{cy}")
+                log_event(f"[{name.upper()}] score: {score} threshold: {cfg['threshold']} tap @ {cx},{cy}")
                 last_fire[name] = now
-                time.sleep(0.4)  # debounce
+                did_anything = True
+                time.sleep(1.0)
+                last_generic_fire = now
 
-        time.sleep(0.2)
+
+        WORKFLOW_MANAGER.release(Workflow.GENERIC)
+
+        # Se ha fatto qualcosa, dormi un po’ di più per evitare spam
+        time.sleep(0.2 if not did_anything else 1)
+
+# ============================================================
+# TICK MODE WRAPPERS (per uso sequenziale)
+# ============================================================
+
+# 1. TREASURE WATCHER
+def treasure_watcher_tick(stop_evt):
+    if not hasattr(treasure_watcher_tick, "_gen"):
+        treasure_watcher_tick._gen = treasure_watcher_loop(stop_evt)
+    try:
+        next(treasure_watcher_tick._gen)
+    except StopIteration:
+        del treasure_watcher_tick._gen
+
+def treasure_watcher_loop(stop_evt):
+    templates = load_templates_from_dir(TEMPLATES_TREASURES_DIR)
+    if not templates:
+        return
+
+    last_alert = 0.0
+    hits = 0
+
+    while not stop_evt.is_set():
+        print("[DEBUG] treasure_watcher_loop attivo")
+        with SCREENSHOT_LOCK:
+            img = load_image(SCREENSHOT_PATH)
+
+        if img is None:
+            yield; continue
+
+        roi, coords = crop_roi(img, TREASURE_ROI)
+        if DEBUG_SAVE_ROIS:
+            cv2.imwrite(os.path.join(DEBUG_DIR, "roi_treasure.png"), roi)
+
+        name, score, loc, hw = match_any(roi, templates)
+        if not DEBUG_EVENTS_ONLY:
+            log_event(f"[TREASURE] best={name} score={score:.3f} ROI={coords} thr={MATCH_THRESHOLD_TREASURE}")
+
+        if score >= MATCH_THRESHOLD_TREASURE:
+            hits += 1
+        else:
+            hits = 0
+
+        now = time.time()
+        if hits >= CONSECUTIVE_HITS_REQUIRED_TREASURE and (now - last_alert) >= MIN_SECONDS_BETWEEN_TREASURE_ALERTS:
+            log_event(f"[TREASURE] RILEVATO {name} score={score:.3f}")
+            send_notification(f"🎁 Tesoro rilevato! ({name})")
+
+            WORKFLOW_MANAGER.force(Workflow.TREASURE)
+            if WORKFLOW_MANAGER.acquire(Workflow.TREASURE):
+                cx, cy = tap_match_in_fullscreen(coords, loc, hw)
+                log_event(f"[TREASURE] tap icon @ {cx},{cy} -> open chat")
+
+            TREASURE_FLOW_EVENT.set()
+            WORKFLOW_MANAGER.preempt_lower_priority(Workflow.TREASURE)
+            treasure_flow_watcher.flow.trigger()
+            last_alert = now
+            hits = 0
+
+        yield
+        time.sleep(CHECK_INTERVAL_SEC)
+
+# 2. HOSPITAL WATCHER
+def hospital_watcher_tick(stop_evt):
+    if not hasattr(hospital_watcher_tick, "_gen"):
+        hospital_watcher_tick._gen = hospital_watcher_loop(stop_evt)
+    try:
+        next(hospital_watcher_tick._gen)
+    except StopIteration:
+        del hospital_watcher_tick._gen
+
+def hospital_watcher_loop(stop_evt):
+    global last_hospital_action, HEAL_BATCH_ALREADY_SET
+    templates = load_templates_from_dir("hospital")
+
+    while not stop_evt.is_set():
+        if not WORKFLOW_MANAGER.can_run(Workflow.HEAL):
+            yield; time.sleep(0.5); continue
+
+        img = load_image(SCREENSHOT_PATH)
+        if img is None:
+            yield; time.sleep(0.5); continue
+
+        roi, coords = crop_roi(img, HOSPITAL_BANNER_ROI)
+        name, score, loc, hw = match_any(roi, templates)
+
+        if not DEBUG_EVENTS_ONLY:
+            log_event(f"[HOSPITAL] best={name} score={score:.3f}")
+
+        if score >= MATCH_THRESHOLD_HOSPITAL:
+            now = time.time()
+            if now - last_hospital_action < HOSPITAL_COOLDOWN:
+                yield; time.sleep(0.5); continue
+
+            if not WORKFLOW_MANAGER.acquire(Workflow.HEAL):
+                yield; continue
+
+            last_hospital_action = now
+
+            if not HEAL_BATCH_ALREADY_SET:
+                xs, ys, xe, ye = crop_roi(img, HOSPITAL_FIRST_ROW_NUMBER_LABEL_ROI)[1]
+                adb_tap((xs + xe) // 2, (ys + ye) // 2)
+                log_event("[HOSPITAL] tap number label")
+                time.sleep(1)
+
+                adb_input_text(str(HEAL_BATCH_DEFAULT))
+                adb_keyevent(66)
+                log_event(f"[HOSPITAL] input batch={HEAL_BATCH_DEFAULT}")
+                time.sleep(0.5)
+
+                HEAL_BATCH_ALREADY_SET = True
+
+            heal_x = int(img.shape[1] * 0.83)
+            heal_y = int(img.shape[0] * 0.86)
+            adb_tap(heal_x, heal_y)
+            log_event("[HOSPITAL] tap HEAL button")
+            time.sleep(0.5)
+            WORKFLOW_MANAGER.release(Workflow.HEAL)
+
+        yield
+        time.sleep(0.5)
+
+# 3. DONATION WATCHER
+def donation_watcher_tick(stop_evt):
+    if not hasattr(donation_watcher_tick, "_gen"):
+        donation_watcher_tick._gen = donation_watcher_loop(stop_evt)
+    try:
+        next(donation_watcher_tick._gen)
+    except StopIteration:
+        del donation_watcher_tick._gen
+
+def donation_watcher_loop(stop_evt):
+    from donation_flow import donation_watcher
+
+    while not stop_evt.is_set():
+        # Chiamiamo la funzione già esistente (blocca il flow finché termina)
+        donation_watcher(stop_evt, SCREENSHOT_PATH, SCREENSHOT_LOCK, log_event)
+        yield
+
+_hq_upgrade_state = {"state": "IDLE"}
+_hq_templates = None
+
+def hq_upgrade_watcher_tick(stop_evt):
+    global last_hq_action, _hq_upgrade_state, _hq_templates
+
+    if _hq_templates is None:
+        _hq_templates = load_templates_from_dir(TEMPLATES_HQ_UPGRADE_DIR)
+        if not _hq_templates:
+            log_event("[HQ] Nessun template trovato. Tick disabilitato.")
+            return
+
+    if stop_evt.is_set():
+        return
+
+    with SCREENSHOT_LOCK:
+        img = load_image(SCREENSHOT_PATH)
+
+    if img is None:
+        return
+
+    state = _hq_upgrade_state["state"]
+
+    if state == "IDLE":
+        roi, coords = crop_roi(img, HQ_BUBBLE_ROI)
+        name, score, loc, hw = match_any(roi, _hq_templates)
+
+        if score >= MATCH_THRESHOLD_HQ and "bubble" in name.lower():
+            if not WORKFLOW_MANAGER.can_run(Workflow.HQ):
+                return
+            now = time.time()
+            if now - last_hq_action < HQ_COOLDOWN:
+                return
+            last_hq_action = now
+            tap_match_in_fullscreen(coords, loc, hw)
+            log_event("[HQ] bubble → chat")
+            _hq_upgrade_state["state"] = "CHAT_OPENED"
+            time.sleep(2)
+        return
+
+    elif state == "CHAT_OPENED":
+        if WORKFLOW_MANAGER.acquire(Workflow.HQ):
+            roi, coords = crop_roi(img, HQ_GIFT_ROI)
+            name, score, loc, hw = match_any(roi, _hq_templates)
+
+            if score >= MATCH_THRESHOLD_HQ and "gift" in name.lower():
+                tap_match_in_fullscreen(coords, loc, hw)
+                log_event("[HQ] gift banner")
+                _hq_upgrade_state["state"] = "GIFT_OPENED"
+                time.sleep(2)
+            else:
+                _hq_upgrade_state["state"] = "IDLE"
+                WORKFLOW_MANAGER.release(Workflow.HQ)
+        return
+
+    elif state == "GIFT_OPENED":
+        roi, coords = crop_roi(img, HQ_OPEN_ROI)
+        name, score, loc, hw = match_any(roi, _hq_templates)
+
+        if score >= MATCH_THRESHOLD_HQ and "open" in name.lower():
+            tap_match_in_fullscreen(coords, loc, hw)
+            log_event("[HQ] OPEN")
+            _hq_upgrade_state["state"] = "WAIT_CONFIRM"
+            time.sleep(2)
+        else:
+            _hq_upgrade_state["state"] = "IDLE"
+            WORKFLOW_MANAGER.release(Workflow.HQ)
+        return
+
+    elif state == "WAIT_CONFIRM":
+        roi, coords = crop_roi(img, HQ_CONFIRM_ROI)
+        name, score, loc, hw = match_any(roi, _hq_templates)
+
+        if score >= MATCH_THRESHOLD_HQ and "confirm" in name.lower():
+            tap_match_in_fullscreen(coords, loc, hw)
+            log_event("[HQ] CONFIRM → DONE")
+        _hq_upgrade_state["state"] = "IDLE"
+        WORKFLOW_MANAGER.release(Workflow.HQ)
+        time.sleep(3)
+        return
+_simple_event_templates = {}
+_last_fire_simple_event = {}
+_last_generic_fire = 0.0
+
+def simple_event_watcher_tick(stop_evt):
+    global _simple_event_templates, _last_fire_simple_event, _last_generic_fire
+
+    if not _simple_event_templates:
+        for name, cfg in SIMPLE_EVENTS.items():
+            templates = load_templates_from_dir(cfg["templates"])
+            if templates:
+                _simple_event_templates[name] = templates
+        _last_fire_simple_event = {name: 0.0 for name in _simple_event_templates}
+
+    now = time.time()
+    if now - _last_generic_fire < 10:
+        return
+
+    if not WORKFLOW_MANAGER.acquire(Workflow.GENERIC):
+        return
+
+    with SCREENSHOT_LOCK:
+        img = load_image(SCREENSHOT_PATH)
+
+    if img is None:
+        WORKFLOW_MANAGER.release(Workflow.GENERIC)
+        return
+
+    did_anything = False
+
+    for name, templates in _simple_event_templates.items():
+        cfg = SIMPLE_EVENTS[name]
+        if now - _last_fire_simple_event[name] < cfg["cooldown"]:
+            continue
+
+        roi_img, roi_coords = crop_roi(img, cfg["roi"])
+        name_t, score, loc, hw = match_any(roi_img, templates)
+
+        if not DEBUG_EVENTS_ONLY:
+            log_event(f"[{name.upper()}] best={name_t} score={score:.3f} thr={cfg['threshold']:.2f}")
+
+        if score >= cfg["threshold"]:
+            cx, cy = tap_match_in_fullscreen(roi_coords, loc, hw)
+            log_event(f"[{name.upper()}] score: {score} threshold: {cfg['threshold']} tap @ {cx},{cy}")
+            _last_fire_simple_event[name] = now
+            _last_generic_fire = now
+            did_anything = True
+            time.sleep(1.0)
+
+    WORKFLOW_MANAGER.release(Workflow.GENERIC)
+
+    if did_anything:
+        time.sleep(1)
+
+# 3b. TREASURE FLOW (chat explorer)
+def treasure_flow_watcher_tick():
+    with SCREENSHOT_LOCK:
+        img = load_image(SCREENSHOT_PATH)
+
+    if img is not None:
+        treasure_flow_watcher.flow.step(img)
+
+def donation_flow_tick():
+    flow = donation_flow_holder.get("flow")
+    if flow is None:
+        return
+
+    with SCREENSHOT_LOCK:
+        img = load_image(SCREENSHOT_PATH)
+
+    if img is not None:
+        flow.step(img)
 
 # ============================================================
 # MAIN
@@ -616,28 +938,66 @@ def main():
 
     stop_evt = threading.Event()
 
-    t0 = threading.Thread(target=screenshot_producer, args=(stop_evt,), daemon=True )
-    t1 = threading.Thread(target=treasure_watcher, args=(stop_evt,), daemon=True)
-    t3 = threading.Thread( target=hospital_watcher, args=(stop_evt,), daemon=True ) 
-    t5 = threading.Thread( target=treasure_flow_watcher, args=(stop_evt, SCREENSHOT_PATH, SCREENSHOT_LOCK, log_event), daemon=True ) 
-    t7 = threading.Thread( target=hq_upgrade_watcher, args=(stop_evt,), daemon=True )
-    t14 = threading.Thread( target=simple_event_watcher, args=(stop_evt,), daemon=True )
-    
-    t0.start()
-    t1.start()
-    t3.start()
-    t5.start()
-    t7.start()
-    t14.start()
+    if not USE_SEQUENTIAL:
 
-    try:
-        while True:
+        t0 = threading.Thread(target=screenshot_producer, args=(stop_evt,), daemon=True )
+        t1 = threading.Thread(target=treasure_watcher, args=(stop_evt,), daemon=True)
+        t3 = threading.Thread( target=hospital_watcher, args=(stop_evt,), daemon=True ) 
+        t5 = threading.Thread( target=treasure_flow_watcher, args=(stop_evt, SCREENSHOT_PATH, SCREENSHOT_LOCK, log_event), daemon=True ) 
+        t7 = threading.Thread( target=hq_upgrade_watcher, args=(stop_evt,), daemon=True )
+        t14 = threading.Thread( target=simple_event_watcher, args=(stop_evt,), daemon=True )
+        t15 = threading.Thread( target=donation_watcher, args=(stop_evt, SCREENSHOT_PATH, SCREENSHOT_LOCK, log_event), daemon=True ) 
+           
+        t0.start()
+        t1.start()
+        t3.start()
+        t5.start()
+        t7.start()
+        t14.start()
+        t15.start()
+
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\n[!] Stop richiesto.")
+            stop_evt.set()
             time.sleep(1)
-    except KeyboardInterrupt:
-        print("\n[!] Stop richiesto.")
-        stop_evt.set()
-        time.sleep(1)
 
+    else:
+        threading.Thread(target=screenshot_producer, args=(stop_evt,), daemon=True).start()
+        treasure_flow_watcher.flow = TreasureFlow(log_fn=log_event)
+        donation_flow_holder["flow"] = DonationFlow(log_event)
+        
+        #LOGICA SEQUENZIALE
+        try:
+            while not stop_evt.is_set():
+                # 1. Tesori
+                treasure_watcher_tick(stop_evt)
+                
+                # 2. Heal
+                hospital_watcher_tick(stop_evt)
+                
+                # 3. Treasure flow (quando triggerato)
+                treasure_flow_watcher_tick()
+                
+                # 4. HQ gifts
+                hq_upgrade_watcher_tick(stop_evt)
+                
+                # 5. Eventi semplici
+                simple_event_watcher_tick(stop_evt)
+                
+                # 6. Donazioni
+                donation_flow_tick()
+                donation_flow_holder["flow"].trigger()
+    
+                # Dopo ogni ciclo, puoi dormire un attimo
+                time.sleep(1)
+    
+        except KeyboardInterrupt:
+            print("\n[!] Stop richiesto.")
+            stop_evt.set()
+            time.sleep(1)
 
 if __name__ == "__main__":
     main()

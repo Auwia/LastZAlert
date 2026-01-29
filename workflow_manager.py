@@ -2,52 +2,46 @@ import threading
 from enum import IntEnum
 
 class Workflow(IntEnum):
-    TREASURE = 1
-    HQ       = 2
+    TREASURE = 5
+    HQ       = 4
     HEAL     = 3
-    GENERIC  = 4
+    DONATION = 2
+    GENERIC  = 1
 
 class WorkflowManager:
     def __init__(self):
         self._lock = threading.Lock()
-        self.current = None
         self.active: Workflow | None = None
+
+    def should_run(self):
+        return self.state != FlowState.IDLE
 
     def can_run(self, wf: Workflow) -> bool:
         with self._lock:
-            if self.active is None:
-                return True
-            return wf <= self.active  # priorità più alta vince
+            return self.active is None or self.active == wf
 
     def acquire(self, wf: Workflow) -> bool:
         with self._lock:
-            if self.active is None or wf < self.active:
+            if self.active is None or self.active <= wf:
                 self.active = wf
                 return True
-            return False
+            else:
+                print(f"[WF] BLOCKED: {wf.name} → currently active: {self.active.name}")
+                return False
 
     def release(self, wf: Workflow):
         with self._lock:
             if self.active == wf:
                 self.active = None
 
-    def is_idle_or(self, wf: Workflow) -> bool:
+    def force(self, wf: Workflow):
         with self._lock:
-            return self.current is None or self.current == wf
+            self.active = wf
 
     def preempt_lower_priority(self, wf: Workflow):
         with self._lock:
-            if self.current != wf:
-                self.current = wf
+            if self.active is None or self.active < wf:
+                self.active = wf
 
-    def force(self, wf: Workflow):
-        """
-        Forza l'attivazione di un workflow
-        scacciando qualsiasi altro workflow attivo
-        """
-        with self._lock:
-            self.current = wf
 
-# istanza globale
 WORKFLOW_MANAGER = WorkflowManager()
-

@@ -60,7 +60,7 @@ TIMER_MISSING_TICKS_TO_FINISH = 12  # 12 * 0.25 = ~3 sec
 # ============================================================
 
 # Link "Explore Treasure" nella chat: zona chat centrale
-ROI_CHAT_LINK = (0.03, 0.97, 0.10, 0.95)
+ROI_CHAT_LINK = (0.0, 1.0, 0.0, 1.0)
 
 # Elicottero sulla mappa: spesso centro/basso
 ROI_HELI = (0.0, 1.0, 0.0, 1.0) #backup: (0.15, 0.85, 0.25, 0.80)
@@ -338,7 +338,13 @@ class TreasureFlow:
                         f"[TREASURE-FLOW] chat link debole (score={score:.3f}), attendo nuovo frame"
                     )
                     return
-                cx, cy = tap_match_in_fullscreen(coords, loc, hw)
+                #cx, cy = tap_match_in_fullscreen(coords, loc, hw)
+
+                xs, ys, _, _ = coords
+                cx = xs + loc[0] + int(hw[1] * 0.88)  # 88% della larghezza = zona "State"
+                cy = ys + loc[1] + hw[0] // 2         # centro verticale
+                adb_tap(cx, cy)
+
                 self._mark_action()
                 self.log(f"[TREASURE-FLOW] chat link tap @ {cx},{cy} score={score:.3f} thr={THR_CHAT_LINK}")
                 self.state = FlowState.IN_MAP_FIND_HELI
@@ -500,4 +506,3 @@ def treasure_flow_watcher(stop_evt: threading.Event,
             flow.step(img)
 
         time.sleep(FLOW_TICK_SEC)
-
