@@ -3,9 +3,24 @@ import os
 import cv2
 import numpy as np
 import subprocess
+from datetime import datetime
 
 ADB_CMD = "adb"
 
+DEBUG = False
+DEBUG_DIR = "debug/forziere"
+
+def debug_save(img, name):
+    if not DEBUG:
+        return
+    os.makedirs(DEBUG_DIR, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    #path = f"{DEBUG_DIR}/{ts}_{name}.png"
+    path = f"{DEBUG_DIR}/{name}.png"
+    cv2.imwrite(path, img)
+
+def adb_swipe(x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300):
+    subprocess.run(["adb", "shell", "input", "swipe", str(x1), str(y1), str(x2), str(y2), str(duration_ms)])
 
 def adb_tap(x: int, y: int):
     subprocess.run([ADB_CMD, "shell", "input", "tap", str(int(x)), str(int(y))],

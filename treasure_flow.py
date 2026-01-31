@@ -158,7 +158,7 @@ def tap_match_in_fullscreen(roi_coords, match_loc, tmpl_hw):
     cx = xs + mx + tw // 2
     cy = ys + my + th // 2
     adb_tap(cx, cy)
-    time.sleep(0.4)
+    time.sleep(0.8)
     return cx, cy
 
 def tap_center_of_roi(img, roi_frac):
@@ -166,7 +166,7 @@ def tap_center_of_roi(img, roi_frac):
     cx = (xs + xe) // 2
     cy = (ys + ye) // 2
     adb_tap(cx, cy)
-    time.sleep(0.4)
+    time.sleep(0.8)
     return cx, cy
 
 def parse_timer_text_to_seconds(text: str) -> Optional[int]:
@@ -252,6 +252,7 @@ class TreasureFlow:
         self.state = FlowState.IDLE
         self.last_action_ts = 0.0
         self.timer_missing_ticks = 0
+        self.state_enter_ts = time.time()
 
         self.t_chat = load_templates_from_dir(CHAT_LINK_DIR)
         self.t_heli = load_templates_from_dir(HELI_DIR)
@@ -265,11 +266,10 @@ class TreasureFlow:
     def trigger(self):
         if not ENABLE_TREASURE_FLOW:
             return
-
-        WORKFLOW_MANAGER.force(Workflow.TREASURE)
-        WORKFLOW_MANAGER.acquire(Workflow.TREASURE)
-
-        # Avvia sequenza
+    
+        if not WORKFLOW_MANAGER.acquire(Workflow.TREASURE):
+            return
+    
         self.state = FlowState.GO_CHAT
         self.timer_missing_ticks = 0
         self.log("[TREASURE-FLOW] trigger -> GO_CHAT")
@@ -415,7 +415,7 @@ class TreasureFlow:
         # 6) DIGGING_WAIT_TIMER: aspetta timer OCR; se <=5 -> SPAM
         # -------------------------
         if self.state == FlowState.DIGGING_WAIT_TIMER:
-            sec = self.read_timer_seconds(self, img)
+            sec = self.read_timer_seconds(img)
 
             if sec is None:
                 self.timer_missing_ticks += 1
@@ -440,7 +440,7 @@ class TreasureFlow:
             # tap random in ROI
             spam_tap_in_roi(img, ROI_SPAM_TAP, SPAM_TAPS_PER_TICK)
 
-            sec = read_timer_seconds(img)
+            sec = self.read_timer_seconds(img)
             if sec is None:
                 self.timer_missing_ticks += 1
                 if self.timer_missing_ticks >= TIMER_MISSING_TICKS_TO_FINISH:

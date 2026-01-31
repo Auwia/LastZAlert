@@ -11,6 +11,8 @@ from simple_events import SIMPLE_EVENTS
 from treasure_flow import treasure_flow_watcher, TreasureFlow
 from workflow_manager import WORKFLOW_MANAGER, Workflow
 from donation_flow import DonationFlow
+from ministry_flow import MinistryFlow
+from forziere_flow import ForziereFlow
 
 import cv2
 import numpy as np
@@ -26,6 +28,8 @@ PACKAGE_NAME = "com.readygo.barrel.gp"
 USE_SEQUENTIAL = True
 
 donation_flow_holder = {"flow": None}
+ministry_flow_holder = {"flow": None}
+forziere_flow_holder = {"flow": None}
 
 # Discord webhook (ATTENZIONE: se pubblico, meglio metterlo in env var)
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1446565181265154190/pL-0gcgP09RlQqnqHqQDIdQqm505tqa744is2R_1eGA3Had4OXmhPgQrTLYXYzaMld0S"
@@ -51,7 +55,7 @@ DEBUG_DIR               = "debug"
 os.makedirs(DEBUG_DIR, exist_ok=True)
 
 # Heal config
-HEAL_BATCH_DEFAULT = 150
+HEAL_BATCH_DEFAULT = 45
 HEAL_BATCH_ALREADY_SET = False
 
 # HQ upgrade
@@ -103,7 +107,7 @@ DONATE_BUTTON_ROI  = (0.20, 0.80, 0.70, 0.90)
 # ============================================================
 
 DEBUG_SAVE_SCREENSHOTS = False   # salva screen interi
-DEBUG_SAVE_ROIS        = True    # salva le ROI ritagliate
+DEBUG_SAVE_ROIS        = False    # salva le ROI ritagliate
 DEBUG_EVENTS_ONLY      = True  # scrive solo quando riconosce un evento
 
 
@@ -191,7 +195,7 @@ def screenshot_producer(stop_evt: threading.Event):
     tmp_path = SCREENSHOT_PATH + ".tmp"
 
     while not stop_evt.is_set():
-        print("[SEQUENTIAL] Tick loop in esecuzione...")
+        #print("[SEQUENTIAL] Tick loop in esecuzione...")
         try:
             with SCREENSHOT_LOCK:
                 proc = subprocess.run(
@@ -333,6 +337,16 @@ def tap_match_in_fullscreen(roi_coords, match_loc, tmpl_hw):
     adb_tap(cx, cy)
     return cx, cy
 
+def forziere_flow_tick():
+    flow = forziere_flow_holder.get("flow")
+    if flow is None:
+        return
+
+    with SCREENSHOT_LOCK:
+        img = load_image(SCREENSHOT_PATH)
+
+    if img is not None:
+        flow.step(img)
 
 # ============================================================
 # THREAD 1: TREASURE WATCHER
@@ -657,7 +671,7 @@ def treasure_watcher_loop(stop_evt):
     hits = 0
 
     while not stop_evt.is_set():
-        print("[DEBUG] treasure_watcher_loop attivo")
+        #print("[DEBUG] treasure_watcher_loop attivo")
         with SCREENSHOT_LOCK:
             img = load_image(SCREENSHOT_PATH)
 
@@ -926,11 +940,24 @@ def donation_flow_tick():
     if img is not None:
         flow.step(img)
 
+def ministry_flow_tick():
+    flow = ministry_flow_holder.get("flow")
+    if flow is None:
+        return
+
+    with SCREENSHOT_LOCK:
+        img = load_image(SCREENSHOT_PATH)
+
+    if img is not None:
+        flow.step(img)
+
 # ============================================================
 # MAIN
 # ============================================================
 
 def main():
+    ministry_flow = MinistryFlow()
+
     print("=== Last Z Bot (Treasure + Heal, threaded) ===")
 
     if not check_adb_device():
@@ -968,31 +995,59 @@ def main():
         threading.Thread(target=screenshot_producer, args=(stop_evt,), daemon=True).start()
         treasure_flow_watcher.flow = TreasureFlow(log_fn=log_event)
         donation_flow_holder["flow"] = DonationFlow(log_event)
+        ministry_flow_holder["flow"] = MinistryFlow(log_fn=log_event)  
+        forziere_flow_holder["flow"] = ForziereFlow(log_event)
+        dflow = donation_flow_holder.get("flow")
+        mflow = ministry_flow_holder.get("flow")
+        fflow = forziere_flow_holder.get("flow")
         
         #LOGICA SEQUENZIALE
         try:
             while not stop_evt.is_set():
-                # 1. Tesori
-                treasure_watcher_tick(stop_evt)
+               # 1. Tesori
+               treasure_watcher_tick(stop_evt)
                 
-                # 2. Heal
-                hospital_watcher_tick(stop_evt)
+               # 2. Heal
+               hospital_watcher_tick(stop_evt)
                 
-                # 3. Treasure flow (quando triggerato)
-                treasure_flow_watcher_tick()
+               # 3. Treasure flow (quando triggerato)
+               treasure_flow_watcher_tick()
                 
-                # 4. HQ gifts
-                hq_upgrade_watcher_tick(stop_evt)
-                
-                # 5. Eventi semplici
-                simple_event_watcher_tick(stop_evt)
-                
-                # 6. Donazioni
-                donation_flow_tick()
-                donation_flow_holder["flow"].trigger()
-    
-                # Dopo ogni ciclo, puoi dormire un attimo
-                time.sleep(1)
+               # 4. HQ gifts
+               hq_upgrade_watcher_tick(stop_evt)
+               
+               # 5. Eventi semplici
+               simple_event_watcher_tick(stop_evt)
+
+               # 6. Donazioni
+               if (
+                   dflow is not None
+                   and dflow.state.name == "IDLE"
+                   and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
+                   and WORKFLOW_MANAGER.can_run(Workflow.DONATION)
+               ):
+                   dflow.trigger()
+               donation_flow_tick()
+
+               # 7. Ministry
+               if (mflow is not None and mflow.state.name == "IDLE" and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC) and WORKFLOW_MANAGER.can_run(Workflow.MINISTRY)):
+                   if time.time() >= ministry_flow.cooldown_until:
+                       mflow.trigger()
+               ministry_flow_tick()
+#                   print("\n[!] Ministry flow Disabled!")
+
+               # 8. Forziere
+               if (
+                   fflow is not None
+                   and fflow.state.name == "IDLE"
+                   and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
+                   and WORKFLOW_MANAGER.can_run(Workflow.FORZIERE)
+               ):
+                   fflow.trigger()
+               forziere_flow_tick()
+   
+               # Dopo ogni ciclo, puoi dormire un attimo
+               time.sleep(1)
     
         except KeyboardInterrupt:
             print("\n[!] Stop richiesto.")

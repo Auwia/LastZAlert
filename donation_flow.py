@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import traceback
 import time
 import re
 import os
@@ -16,7 +15,7 @@ from bot_utils import load_image, crop_roi, load_templates, match_any, adb_tap
 # DEBUG
 # ============================================================
 
-DEBUG_DONATION = True
+DEBUG_DONATION = False
 DEBUG_DIR = "debug/donation"
 os.makedirs(DEBUG_DIR, exist_ok=True)
 
@@ -107,6 +106,9 @@ class DonationFlow:
         self.last_action_ts = 0.0
         self.attempts_left = 0
         self.next_allowed = 0.0
+        self.started_ts = 0.0
+        self.initial_attempts = 0
+        self.last_progress_ts = 0.0
 
         self.templates = _load_donation_templates()
         self.log("[DONATION-FLOW] inizializzato")
@@ -122,17 +124,23 @@ class DonationFlow:
     # --------------------------------------------------------
 
     def trigger(self):
+        if WORKFLOW_MANAGER.is_active(Workflow.TREASURE):
+            return
         if self.state != DonationState.IDLE:
             return  # Già in corso, ignora
         if time.time() < self.next_allowed:
             return
+        if not WORKFLOW_MANAGER.can_run(Workflow.GENERIC):
+            return
         if not WORKFLOW_MANAGER.acquire(Workflow.DONATION):
             return
+
+        self.started_ts = time.time()
+        self.last_progress_ts = time.time()
     
         self.state = DonationState.FIND_ALLIANCE_ICON
         self._mark_action()
         self.log("[DONATION-FLOW] trigger -> FIND_ALLIANCE_ICON")
-        traceback.print_stack()
 
     # --------------------------------------------------------
 
@@ -141,6 +149,15 @@ class DonationFlow:
             return
 
         if not self._cooldown_ok():
+            return
+
+        # watchdog: reset SOLO se non c'è progresso per troppo tempo
+        STALL_TIMEOUT_SEC = 120
+        if self.state != DonationState.IDLE and (time.time() - self.last_progress_ts) > STALL_TIMEOUT_SEC:
+            self.log("[DONATION-FLOW] STALL → reset + release")
+            self.state = DonationState.IDLE
+            WORKFLOW_MANAGER.release(Workflow.DONATION)
+            self._mark_action()
             return
 
         # ----------------------------------------------------
@@ -195,8 +212,11 @@ class DonationFlow:
                 cx = ox + loc[0] + tap_offset_x
                 cy = oy + loc[1] + hw[0] // 2
                 adb_tap(cx, cy)
+                self.last_progress_ts = time.time()
+                time.sleep(0.5)
                 self.log(f"[DONATION-FLOW] recommended tap score={score:.3f}")
                 self.state = DonationState.READ_ATTEMPTS
+                self.last_progress_ts = time.time()
                 self._mark_action()
             return
 
@@ -206,9 +226,26 @@ class DonationFlow:
         if self.state == DonationState.READ_ATTEMPTS:
             roi, _ = crop_roi(img, ROI_ATTEMPTS)
             txt = _ocr_text(roi)
-            self.attempts_left = _parse_attempts(txt)
-            self.log(f"[DONATION-FLOW] attempts OCR='{txt.strip()}' -> {self.attempts_left}")
+
+            attempts = _parse_attempts(txt)
+            
+            if attempts == 0:
+                self.log("[DONATION-FLOW] no attempts left → read cooldown")
+                self.state = DonationState.READ_COOLDOWN
+                self._mark_action()
+                return
+            
+            if attempts < 0:
+                self.log(f"[DONATION-FLOW] OCR attempts FAILED '{txt.strip()}', retry")
+                self._mark_action()
+                return
+            
+            self.attempts_left = attempts
+            self.initial_attempts = attempts
+            self.last_progress_ts = time.time()
             self.state = DonationState.DONATE_LOOP
+            self._mark_action()
+
             self._mark_action()
             return
 
@@ -227,6 +264,7 @@ class DonationFlow:
                 cy = loc[1] + hw[0] // 2
                 adb_tap(cx, cy)
                 self.attempts_left -= 1
+                self.last_progress_ts = time.time()
                 self.log(f"[DONATION-FLOW] donate, left={self.attempts_left}")
                 self._mark_action()
             return
@@ -242,15 +280,16 @@ class DonationFlow:
             self.donation_done_ts = time.time()
             self.log(f"[DONATION-FLOW] cooldown OCR='{txt.strip()}' -> {sec}s")
 
-        # Cleanup UI: 3 tap in basso a sinistra (x=100, y varia)
-        cleanup_coords = [(100, 2400), (100, 2400), (100, 2400)]
-        for i, (x, y) in enumerate(cleanup_coords):
-            time.sleep(0.5)
-            adb_tap(x, y)
-            self.log(f"[DONATION-FLOW] cleanup tap {i+1} @ ({x},{y})")
+            # Cleanup UI: 3 tap in basso a sinistra (x=100, y varia)
+            cleanup_coords = [(100, 2400), (100, 2400), (100, 2400)]
+            for i, (x, y) in enumerate(cleanup_coords):
+                time.sleep(0.5)
+                adb_tap(x, y)
+                self.log(f"[DONATION-FLOW] cleanup tap {i+1} @ ({x},{y})")
 
-        self.state = DonationState.IDLE
-        WORKFLOW_MANAGER.release(Workflow.DONATION)
-        self.log("[DONATION-FLOW] completed -> IDLE")
-        return
-
+            self.state = DonationState.IDLE
+            WORKFLOW_MANAGER.release(Workflow.DONATION)
+            self.log("[DONATION-FLOW] completed -> IDLE")
+            self._mark_action()
+            return
+    
