@@ -2,16 +2,30 @@ import threading
 from enum import IntEnum
 
 class Workflow(IntEnum):
-    TREASURE = 5
-    HQ       = 4
-    HEAL     = 3
-    DONATION = 2
-    GENERIC  = 1
+    TREASURE = 6
+    HQ       = 5
+    HEAL     = 4
+    DONATION = 3
+    MINISTRY = 2
+    FORZIERE = 1
+    GENERIC  = 0
 
 class WorkflowManager:
     def __init__(self):
         self._lock = threading.Lock()
         self.active: Workflow | None = None
+
+    def has_active(self) -> bool:
+        return self.active_workflow is not None
+
+    def is_idle(self) -> bool:
+        return self.active_workflow is None
+
+    def current(self):
+        return self.active_workflow
+
+    def is_active(self, wf: Workflow) -> bool:
+        return self.active == wf
 
     def should_run(self):
         return self.state != FlowState.IDLE

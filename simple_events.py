@@ -87,10 +87,4 @@ SIMPLE_EVENTS = {
         "threshold": 0.80,
         "cooldown": 1000,
     },
-    "forziere": {
-        "templates": "forziere",
-         "roi": (0.0, 1.00, 0.0, 1.0),
-        "threshold": 0.91,
-        "cooldown": 10,
-    },
 }
