@@ -5,6 +5,8 @@ import re
 import os
 import cv2
 import pytesseract
+import subprocess
+
 from enum import Enum
 from typing import Optional
 
@@ -15,12 +17,14 @@ from bot_utils import adb_tap, crop_roi, match_any, load_templates, load_image
 # DEBUG
 # ============================================================
 
-DEBUG_MINISTRY = True
+DEBUG = False
 DEBUG_DIR = "debug/ministry"
 os.makedirs(DEBUG_DIR, exist_ok=True)
 
+ADB_CMD = "adb"
+
 def dbg_log(log_fn, msg):
-    if DEBUG_MINISTRY:
+    if DEBUG:
         log_fn(msg)
 
 # ============================================================
@@ -172,6 +176,13 @@ def _parse_scheduled(txt: str) -> int:
     m = re.search(r"\((\d+)\s*/\s*50\)", txt)
     return int(m.group(1)) if m else 0
 
+def adb_keyevent(code: int):
+    subprocess.run(
+        [ADB_CMD, "shell", "input", "keyevent", str(code)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+
 # ============================================================
 # TEMPLATES
 # ============================================================
@@ -276,23 +287,27 @@ class MinistryFlow:
         """
         # ROI del banner superiore (nome + durata)
         roi, _ = crop_roi(img, ROI_OFFICER_NICKNAME)
-        self.log("[MINISTRY][DEBUG] _is_current_officer CALLED")
+        if DEBUG:
+            self.log("[MINISTRY][DEBUG] _is_current_officer CALLED")
 
         if roi is None:
-            self.log("[MINISTRY][DEBUG] officer ROI = None")
+            if DEBUG:
+                self.log("[MINISTRY][DEBUG] officer ROI = None")
             return False
 
         if roi.size == 0:
-            self.log("[MINISTRY][DEBUG] officer ROI size = 0")
+            if DEBUG:
+                self.log("[MINISTRY][DEBUG] officer ROI size = 0")
             return False
 
-        if DEBUG_MINISTRY:
+        if DEBUG:
             cv2.imwrite("debug/ministry/roi_officer_nickname_LAST.png", roi)
 
         name, score, _, _ = match_any(roi, self.templates["nickname"])
-        self.log(f"[MINISTRY][DEBUG] officer nickname score={score:.3f}")
+        if DEBUG:
+            self.log(f"[MINISTRY][DEBUG] officer nickname score={score:.3f}")
     
-        if DEBUG_MINISTRY:
+        if DEBUG:
             self.log(f"[MINISTRY][DEBUG] officer nickname score={score:.3f}")
             cv2.imwrite(
                 f"debug/ministry/roi_officer_nickname_score_{score:.3f}.png",
@@ -358,7 +373,7 @@ class MinistryFlow:
         if not WORKFLOW_MANAGER.acquire(Workflow.MINISTRY):
             return
     
-        time.sleep(0.8)
+        time.sleep(0.3)
         self.state = MinistryState.TAP_MAP
         self.started_ts = time.time()
         self._mark_action()
@@ -376,11 +391,11 @@ class MinistryFlow:
             WORKFLOW_MANAGER.release(Workflow.MINISTRY)
             if hasattr(self, "started_ts"):
                 del self.started_ts
-            adb_tap(*BOTTOM_LEFT)
+            adb_keyevent(4)
             time.sleep(0.3)
-            adb_tap(*BOTTOM_LEFT)
+            adb_keyevent(4)
             time.sleep(0.3)
-            adb_tap(*BOTTOM_RIGHT)
+            adb_keyevent(4)
             return
 
         if self.state == MinistryState.DONE:
@@ -445,7 +460,7 @@ class MinistryFlow:
                 return
 
         if self.state == MinistryState.READ_X:
-            time.sleep(0.6)
+            time.sleep(0.2)
             if self._precheck_exit(img):
                 self.state = MinistryState.READ_APPLICATION_NOTE
                 self._mark_action()
@@ -463,7 +478,7 @@ class MinistryFlow:
                 self.log("[MINISTRY] ROI vuota, attendo frame successivo")
                 return
 
-            if DEBUG_MINISTRY:
+            if DEBUG:
                 cv2.imwrite("debug/ministry/roi_ministry_timer.png", roi)
                 cv2.imwrite("debug/ministry/ministry_full.png", img)
 
@@ -493,7 +508,7 @@ class MinistryFlow:
 
         if self.state == MinistryState.BACK_FROM_X:
             adb_tap(*BOTTOM_LEFT)
-            time.sleep(0.6)
+            time.sleep(0.2)
             self.state = MinistryState.SCROLL_UP
             self._mark_action()
             return
@@ -511,7 +526,7 @@ class MinistryFlow:
                 return
 
         if self.state == MinistryState.READ_Y:
-            time.sleep(0.6)
+            time.sleep(0.3)
             if self._precheck_exit(img):
                 self.state = MinistryState.READ_APPLICATION_NOTE
                 self._mark_action()
@@ -527,7 +542,7 @@ class MinistryFlow:
                 self.log("[MINISTRY] ROI vuota, attendo frame successivo")
                 return
     
-            if DEBUG_MINISTRY:
+            if DEBUG:
                 cv2.imwrite("debug/ministry/roi_ministry_science_timer.png", roi)
                 cv2.imwrite("debug/ministry/ministry_science_full.png", img)
 
@@ -577,7 +592,7 @@ class MinistryFlow:
             self.log("[MINISTRY] construction chosen → switching back to construction")
             self.returning_to_construction = True
             adb_tap(*BOTTOM_LEFT)  # chiude popup science
-            time.sleep(0.6)
+            time.sleep(0.3)
             self.state = MinistryState.TAP_CONSTRUCTION
             self._mark_action()
             return
@@ -641,7 +656,7 @@ class MinistryFlow:
             if roi is None or roi.size == 0:
                 return
         
-            if DEBUG_MINISTRY:
+            if DEBUG:
                 cv2.imwrite("debug/ministry/roi_application_note.png", roi)
         
             txt = _ocr_application_note_yellow(roi)
@@ -665,9 +680,9 @@ class MinistryFlow:
 
         if self.state == MinistryState.EXIT_MINISTRY:
             adb_tap(*BOTTOM_LEFT)
-            time.sleep(0.3)
+            time.sleep(0.2)
             adb_tap(*BOTTOM_LEFT)
-            time.sleep(0.3)
+            time.sleep(0.2)
             adb_tap(*BOTTOM_LEFT)
             self._mark_action()
             self.state = MinistryState.BACK_TO_HQ

@@ -646,7 +646,7 @@ def simple_event_watcher(stop_evt):
 
             if score >= cfg["threshold"]:
                 if cfg.get("tap") == "OUTSIDE":
-                    cx, cy = tap_outside_popup(img)
+                    adb_keyevent(4)
                 else:
                     cx, cy = tap_match_in_fullscreen(roi_coords, loc, hw)
                 log_event(f"[{name.upper()}] score: {score} threshold: {cfg['threshold']} tap @ {cx},{cy}")
@@ -1016,7 +1016,7 @@ def main():
         dflow = donation_flow_holder.get("flow")
         mflow = ministry_flow_holder.get("flow")
         fflow = forziere_flow_holder.get("flow")
-        heal_flow = HealFlow(log)
+        heal_flow = HealFlow(log_event)
         
         #LOGICA SEQUENZIALE
         try:
