@@ -13,6 +13,7 @@ from workflow_manager import WORKFLOW_MANAGER, Workflow
 from donation_flow import DonationFlow
 from ministry_flow import MinistryFlow
 from forziere_flow import ForziereFlow
+from heal_flow import HealFlow
 
 import cv2
 import numpy as np
@@ -55,7 +56,7 @@ DEBUG_DIR               = "debug"
 os.makedirs(DEBUG_DIR, exist_ok=True)
 
 # Heal config
-HEAL_BATCH_DEFAULT = 45
+HEAL_BATCH_DEFAULT = 100
 HEAL_BATCH_ALREADY_SET = False
 
 # HQ upgrade
@@ -327,6 +328,14 @@ def match_any(roi_img: np.ndarray, templates: List[Tuple[str, np.ndarray]]):
 
     return best_name, best_score, best_loc, best_hw
 
+def tap_outside_popup(img):
+    h, w = img.shape[:2]
+    # angolo in alto a sinistra: quasi sempre sicuro
+    x = int(w * 0.05)
+    y = int(h * 0.05)
+    adb_tap(x, y)
+    return x, y
+
 def tap_match_in_fullscreen(roi_coords, match_loc, tmpl_hw):
     """Converte loc dentro ROI -> coordinate assolute e tappa al centro."""
     xs, ys, xe, ye = roi_coords
@@ -459,8 +468,8 @@ def hospital_watcher(stop_evt):
             # 3) tap bottone Heal (zona fissa)
             heal_x = int(img.shape[1] * 0.83)
             heal_y = int(img.shape[0] * 0.86)
+            log_event(f"[HOSPITAL] tap HEAL @ {heal_x},{heal_y}")
             adb_tap(heal_x, heal_y)
-            log_event("[HOSPITAL] tap HEAL button")
 
             time.sleep(0.5)
 
@@ -636,7 +645,10 @@ def simple_event_watcher(stop_evt):
                 )
 
             if score >= cfg["threshold"]:
-                cx, cy = tap_match_in_fullscreen(roi_coords, loc, hw)
+                if cfg.get("tap") == "OUTSIDE":
+                    cx, cy = tap_outside_popup(img)
+                else:
+                    cx, cy = tap_match_in_fullscreen(roi_coords, loc, hw)
                 log_event(f"[{name.upper()}] score: {score} threshold: {cfg['threshold']} tap @ {cx},{cy}")
                 last_fire[name] = now
                 did_anything = True
@@ -700,6 +712,7 @@ def treasure_watcher_loop(stop_evt):
             if WORKFLOW_MANAGER.acquire(Workflow.TREASURE):
                 cx, cy = tap_match_in_fullscreen(coords, loc, hw)
                 log_event(f"[TREASURE] tap icon @ {cx},{cy} -> open chat")
+                time.sleep(1)
 
             TREASURE_FLOW_EVENT.set()
             WORKFLOW_MANAGER.preempt_lower_priority(Workflow.TREASURE)
@@ -955,6 +968,9 @@ def ministry_flow_tick():
 # MAIN
 # ============================================================
 
+def log(msg):
+    print(msg)
+
 def main():
     ministry_flow = MinistryFlow()
 
@@ -1000,6 +1016,7 @@ def main():
         dflow = donation_flow_holder.get("flow")
         mflow = ministry_flow_holder.get("flow")
         fflow = forziere_flow_holder.get("flow")
+        heal_flow = HealFlow(log)
         
         #LOGICA SEQUENZIALE
         try:
@@ -1008,7 +1025,16 @@ def main():
                treasure_watcher_tick(stop_evt)
                 
                # 2. Heal
-               hospital_watcher_tick(stop_evt)
+               if (
+                   heal_flow.state.name == "IDLE"
+                   and WORKFLOW_MANAGER.can_run(Workflow.HEAL)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
+               ):
+                   heal_flow.trigger()
+               
+               img = load_image(SCREENSHOT_PATH)
+               if img is not None:
+                   heal_flow.step(img)
                 
                # 3. Treasure flow (quando triggerato)
                treasure_flow_watcher_tick()
@@ -1017,7 +1043,8 @@ def main():
                hq_upgrade_watcher_tick(stop_evt)
                
                # 5. Eventi semplici
-               simple_event_watcher_tick(stop_evt)
+               if not WORKFLOW_MANAGER.is_active(Workflow.HEAL):
+                   simple_event_watcher_tick(stop_evt)
 
                # 6. Donazioni
                if (

@@ -33,8 +33,8 @@ OFFICER_TOTAL_SEC = 10 * 60  # 10 minuti
 
 ROI_APPOINTMENT_LIST = (0.10, 0.90, 0.52, 0.62)
 ROI_APPLICATION_NOTE = (0.18, 0.82, 0.74, 0.86)
-ROI_OFFICER_NICKNAME = (0.25, 0.65, 0.32, 0.38)
-ROI_OFFICER_DURATION = (0.39, 0.44, 0.30, 0.78)
+ROI_OFFICER_NICKNAME = (0.0, 1.0, 0.0, 1.0)
+ROI_OFFICER_DURATION = (0.18, 0.78, 0.34, 0.46)
 
 CENTER_SCREEN = (540, 960)
 BOTTOM_LEFT = (100, 2400)
@@ -368,7 +368,7 @@ class MinistryFlow:
         if (
             self.state not in (MinistryState.IDLE, MinistryState.DONE)
             and hasattr(self, "started_ts")
-            and time.time() - self.started_ts > 120
+            and time.time() - self.started_ts > 220
         ):
             self.log("[MINISTRY] watchdog timeout → reset")
             self.xy_read = False
@@ -393,6 +393,7 @@ class MinistryFlow:
                 cx = loc[0] + hw[1] // 2 + offset[0]
                 cy = loc[1] + hw[0] // 2 + offset[1]
                 adb_tap(cx, cy)
+                time.sleep(0.4)
                 self.log(f"[MINISTRY] tap {key} score={score:.3f}")
                 if next_state:
                     self.state = next_state
@@ -402,6 +403,7 @@ class MinistryFlow:
 
         def tap_and_next(x, y, next_state):
             adb_tap(x, y)
+            time.sleep(0.1)
             self.state = next_state
             self._mark_action()
 
@@ -434,8 +436,11 @@ class MinistryFlow:
                 return
 
         if self.state == MinistryState.TAP_CONSTRUCTION:
-            next_state = MinistryState.READ_X
-        
+            next_state = (
+                MinistryState.APPLY_CONSTRUCTION_DONE
+                if self.returning_to_construction
+                else MinistryState.READ_X
+            )
             if tap_template("sec_constr", next_state):
                 return
 
@@ -488,6 +493,7 @@ class MinistryFlow:
 
         if self.state == MinistryState.BACK_FROM_X:
             adb_tap(*BOTTOM_LEFT)
+            time.sleep(0.6)
             self.state = MinistryState.SCROLL_UP
             self._mark_action()
             return
@@ -571,6 +577,7 @@ class MinistryFlow:
             self.log("[MINISTRY] construction chosen → switching back to construction")
             self.returning_to_construction = True
             adb_tap(*BOTTOM_LEFT)  # chiude popup science
+            time.sleep(0.6)
             self.state = MinistryState.TAP_CONSTRUCTION
             self._mark_action()
             return
@@ -645,7 +652,7 @@ class MinistryFlow:
             # --- FALLBACK OBBLIGATORIO ---
             if start_ts is None:
                 self.log("[MINISTRY] application note non leggibile → cooldown forzato 30 min")
-                cooldown = int(time.time()) + 1800
+                cooldown = int(time.time()) + 600
                 self.cooldown_until = cooldown
             else:
                 cooldown = start_ts + 600
