@@ -40,7 +40,7 @@ class WorkflowManager:
                 self.active = wf
                 return True
             else:
-                print(f"[WF] BLOCKED: {wf.name} → currently active: {self.active.name}")
+                #print(f"[WF] BLOCKED: {wf.name} → currently active: {self.active.name}")
                 return False
 
     def release(self, wf: Workflow):

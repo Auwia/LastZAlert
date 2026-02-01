@@ -194,21 +194,6 @@ def log_event(msg: str):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{ts}] {msg}", flush=True)
 
-def read_timer_seconds(self, img) -> Optional[int]:
-    if not _HAS_TESSERACT:
-        return None
-    roi, _ = crop_roi(img, ROI_TIMER_TEXT)
-    # preprocessing per OCR: grayscale + threshold
-    g = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    g = cv2.resize(g, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
-    _, th = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    # whitelist per ridurre rumore
-    config = "--psm 7 -c tessedit_char_whitelist=0123456789:"
-    txt = pytesseract.image_to_string(th, config=config)  # type: ignore
-    self.log(f"[TREASURE-FLOW] OCR raw='{txt}'")
-    sec = parse_timer_text_to_seconds(txt)
-    return sec
-
 def spam_tap_in_roi(img, roi_frac, taps: int):
     h, w = img.shape[:2]
     x1, x2, y1, y2 = roi_frac
@@ -262,6 +247,21 @@ class TreasureFlow:
 
         if not _HAS_TESSERACT:
             self.log("[TREASURE-FLOW] OCR timer: pytesseract NON disponibile (spam <=5s disabilitato)")
+
+    def read_timer_seconds(self, img) -> Optional[int]:
+        if not _HAS_TESSERACT:
+            return None
+        roi, _ = crop_roi(img, ROI_TIMER_TEXT)
+        # preprocessing per OCR: grayscale + threshold
+        g = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        g = cv2.resize(g, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+        _, th = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # whitelist per ridurre rumore
+        config = "--psm 7 -c tessedit_char_whitelist=0123456789:"
+        txt = pytesseract.image_to_string(th, config=config)  # type: ignore
+        self.log(f"[TREASURE-FLOW] OCR raw='{txt}'")
+        sec = parse_timer_text_to_seconds(txt)
+        return sec
 
     def trigger(self):
         if not ENABLE_TREASURE_FLOW:

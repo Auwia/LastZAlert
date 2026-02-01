@@ -9,12 +9,6 @@ SIMPLE_EVENTS = {
         "threshold": 0.75,
         "cooldown": 3,
     },
-    "heal": {
-        "templates": "heal",
-        "roi": (0.0, 1.0, 0.0, 1.0),
-        "threshold": 0.72,
-        "cooldown": 1,
-    },
     "heal_help": {
         "templates": "heal_help",
         "roi": (0.0, 1.0, 0.0, 1.0),
@@ -37,10 +31,10 @@ SIMPLE_EVENTS = {
 #    },
     "confirm_popup": {
         "templates": "confirm_popup",
-        "roi": (0.0, 1.00, 0.0, 1.0),
+        "roi": (0.0, 1.0, 0.0, 1.0),
         "threshold": 0.9,
         "cooldown": 10,
-        "tap": "center",
+        "tap": "OUTSIDE",
         "log": "[CONFIRM_POPUP]",
     },
     "cancel_popup": {
