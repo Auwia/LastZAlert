@@ -10,6 +10,9 @@ ADB_CMD = "adb"
 DEBUG = False
 DEBUG_DIR = "debug/forziere"
 
+def adb_keyevent(code: int):
+    subprocess.run([ADB_CMD, "shell", "input", "keyevent", str(code)])
+
 def debug_save(img, name):
     if not DEBUG:
         return
@@ -26,10 +29,8 @@ def adb_tap(x: int, y: int):
     subprocess.run([ADB_CMD, "shell", "input", "tap", str(int(x)), str(int(y))],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-
 def load_image(path: str):
     return cv2.imread(path, cv2.IMREAD_COLOR)
-
 
 def crop_roi(img, roi_frac):
     """
@@ -45,7 +46,6 @@ def crop_roi(img, roi_frac):
 
     roi = img[y1p:y2p, x1p:x2p]
     return roi, (x1p, y1p)
-
 
 def load_templates(path: str):
     """
@@ -80,7 +80,6 @@ def load_templates(path: str):
 
     print(f"[!] Path template non trovato: '{path}'")
     return []
-
 
 def match_any(img, templates):
     """

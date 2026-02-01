@@ -38,7 +38,7 @@ ROI_DONATE_BUTTON = (0.20, 0.80, 0.70, 0.90)
 ROI_ATTEMPTS = (0.45, 0.85, 0.62, 0.75)
 ROI_COOLDOWN = (0.20, 0.95, 0.70, 0.92)
 
-DEFAULT_COOLDOWN = 600
+DEFAULT_COOLDOWN = 60
 ACTION_COOLDOWN_SEC = 1.0
 
 # ============================================================

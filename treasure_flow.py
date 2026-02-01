@@ -42,6 +42,7 @@ THR_CHAT_LINK   = 0.45
 THR_HELI        = 0.45
 THR_MAGNIFIER   = 0.45
 THR_MARCH       = 0.45
+THR_CHAT_LINK_EXACT = 0.02
 
 # Loop / timings
 FLOW_TICK_SEC = 0.25
@@ -130,6 +131,42 @@ def load_templates_from_dir(directory: str) -> List[Tuple[str, np.ndarray]]:
             continue
         templates.append((name, im))
     return templates
+
+def match_any_exact_sqdiff(
+    roi_img: np.ndarray,
+    templates: List[Tuple[str, np.ndarray]]
+):
+    """
+    Matching 1:1 pixel-exact usando TM_SQDIFF_NORMED.
+    Ritorna il template più simile (diff più basso).
+    """
+    roi_g = cv2.cvtColor(roi_img, cv2.COLOR_BGR2GRAY)
+
+    best_name = None
+    best_diff = 1.0
+    best_loc = (0, 0)
+    best_hw = (0, 0)
+
+    for name, tmpl in templates:
+        tmpl_g = cv2.cvtColor(tmpl, cv2.COLOR_BGR2GRAY)
+        th, tw = tmpl_g.shape[:2]
+        rh, rw = roi_g.shape[:2]
+
+        if rh < th or rw < tw:
+            continue
+
+        res = cv2.matchTemplate(
+            roi_g, tmpl_g, cv2.TM_SQDIFF_NORMED
+        )
+        min_val, _, min_loc, _ = cv2.minMaxLoc(res)
+
+        if min_val < best_diff:
+            best_diff = float(min_val)
+            best_name = name
+            best_loc = min_loc
+            best_hw = (th, tw)
+
+    return best_name, best_diff, best_loc, best_hw
 
 def match_any(roi_img: np.ndarray, templates: List[Tuple[str, np.ndarray]]):
     best_name = None
@@ -326,7 +363,7 @@ class TreasureFlow:
 
             self.log(f"[DEBUG] ROI_CHAT_LINK: x={coords[0]}, y={coords[1]}, w={roi.shape[1]}, h={roi.shape[0]}")
 
-            name, score, loc, hw = match_any(roi, self.t_chat)
+            name, score, loc, hw = match_any_exact_sqdiff(roi, self.t_chat)
             if name:
                 self.log(f"[DEBUG] Match trovato: template={name}, score={score:.3f}, pos={loc}, dim={hw}")
             else:

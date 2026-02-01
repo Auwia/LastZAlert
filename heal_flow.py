@@ -14,6 +14,8 @@ import subprocess
 
 ADB_CMD = "adb"
 
+DEBUG = False
+
 THR_HOSPITAL = 0.85
 ACTION_COOLDOWN_SEC = 1.0
 STALL_TIMEOUT_SEC = 90
@@ -27,7 +29,7 @@ FIRST_ROW_LABEL_XY = (1420, 820)
 HOSPITAL_ICON_XY = (960, 1080) 
 HEAL_BUTTON_XY = (900, 2120)
 FIRST_ROW_LABEL_ROI = (0.78, 0.93, 0.33, 0.42)
-HEAL_BATCH = 150
+HEAL_BATCH = 50
 
 # ============================================================
 # ADB HELPERS (STILE VECCHIO – GLOBALI)
@@ -119,7 +121,8 @@ class HealFlow:
         self.state = HealState.OPEN_HOSPITAL
         self.last_action_ts = time.time()
         self.last_progress_ts = time.time()
-        self.log("[HEAL-FLOW] trigger -> OPEN_HOSPITAL")
+        if DEBUG:
+            self.log("[HEAL-FLOW] trigger -> OPEN_HOSPITAL")
 
     # --------------------------------------------------------
 
@@ -148,13 +151,15 @@ class HealFlow:
                 cx = loc[0] + hw[1] // 2
                 cy = loc[1] + hw[0] // 2
                 adb_tap(cx, cy)
-                self.log(f"[HEAL-FLOW] heal icon tap @ {cx},{cy} score={score:.3f}")
+                if DEBUG:
+                    self.log(f"[HEAL-FLOW] heal icon tap @ {cx},{cy} score={score:.3f}")
                 self.state = HealState.WAIT_HOSPITAL_UI
                 self.last_progress_ts = time.time()
                 self._mark_action()
                 return
             else:
-                self.log("[HEAL-FLOW] heal icon NOT found → abort")
+                if DEBUG:
+                    self.log("[HEAL-FLOW] heal icon NOT found → abort")
                 self.state = HealState.IDLE
                 WORKFLOW_MANAGER.release(Workflow.HEAL)
                 self._mark_action()
@@ -167,7 +172,8 @@ class HealFlow:
             roi, _ = crop_roi(img, HOSPITAL_BANNER_ROI)
             name, score, *_ = match_any(roi, self.templates["hospital"])
             if name and score >= THR_HOSPITAL:
-                self.log("[HEAL-FLOW] hospital UI detected")
+                if DEBUG:
+                    self.log("[HEAL-FLOW] hospital UI detected")
                 self.state = HealState.SET_BATCH if not self.batch_set else HealState.TAP_HEAL
                 self.last_progress_ts = time.time()
                 self._mark_action()
@@ -197,5 +203,7 @@ class HealFlow:
             self.state = HealState.IDLE
             self.batch_set = False
             WORKFLOW_MANAGER.release(Workflow.HEAL)
+            if DEBUG:
+                self.log("[HEAL-FLOW] released.")
             self._mark_action()
             return
