@@ -203,6 +203,8 @@ def _load_ministry_templates():
         "sec_science_title":   load_templates("ministry/sec_science_title.png"),
         "go_hq":               load_templates("ministry/go_hq.png"),
         "nickname":            load_templates("ministry/nickname_auwia81.png"),
+        "science_icon":        load_templates("ministry/science_icon/science_icon.png"),
+        "construction_icon":   load_templates("ministry/construction_icon/construction_icon.png"),
     }
 
 # ============================================================
@@ -241,7 +243,29 @@ class MinistryState(Enum):
 # ============================================================
 
 class MinistryFlow:
+    def _tap_template(self, img, key, next_state=None, offset=(0,0), score_thr=THR):
+        name, score, loc, hw = match_any(img, self.templates[key])
+        if name and score >= score_thr:
+            cx = loc[0] + hw[1] // 2 + offset[0]
+            cy = loc[1] + hw[0] // 2 + offset[1]
+            adb_tap(cx, cy)
+            time.sleep(0.4)
+            self.log(f"[MINISTRY] tap {key} score={score:.3f}")
+            if next_state:
+                self.state = next_state
+            self._mark_action()
+            return True
+        return False
+
     def _precheck_exit(self, img) -> bool:
+        if self._construction_icon_present(img): 
+            self.log("[MINISTRY] precheck: already construction officer")
+            return True
+            
+        if self._science_icon_present(img): 
+            self.log("[MINISTRY] precheck: already science officer")
+            return True
+            
         if self._is_current_officer(img):
             self.log("[MINISTRY] precheck: already officer")
             return True
@@ -259,6 +283,14 @@ class MinistryFlow:
             return True
     
         return False
+
+    def _construction_icon_present(self, img) -> bool:
+        name, score, _, _ = match_any(img, self.templates["construction_icon"])
+        return name is not None and score >= 0.85
+        
+    def _science_icon_present(self, img) -> bool:
+        name, score, _, _ = match_any(img, self.templates["science_icon"])
+        return name is not None and score >= 0.85
 
     def _handle_current_officer(self, img) -> bool:
         if not self._is_current_officer(img):
@@ -285,34 +317,14 @@ class MinistryFlow:
         """
         Rileva se l'utente è GIÀ ufficiale tramite nickname (image match).
         """
-        # ROI del banner superiore (nome + durata)
-        roi, _ = crop_roi(img, ROI_OFFICER_NICKNAME)
         if DEBUG:
             self.log("[MINISTRY][DEBUG] _is_current_officer CALLED")
+            cv2.imwrite("debug/ministry/roi_officer_nickname_LAST.png", img)
 
-        if roi is None:
-            if DEBUG:
-                self.log("[MINISTRY][DEBUG] officer ROI = None")
-            return False
-
-        if roi.size == 0:
-            if DEBUG:
-                self.log("[MINISTRY][DEBUG] officer ROI size = 0")
-            return False
-
-        if DEBUG:
-            cv2.imwrite("debug/ministry/roi_officer_nickname_LAST.png", roi)
-
-        name, score, _, _ = match_any(roi, self.templates["nickname"])
-        if DEBUG:
-            self.log(f"[MINISTRY][DEBUG] officer nickname score={score:.3f}")
+        name, score, _, _ = match_any(img, self.templates["nickname"])
     
         if DEBUG:
             self.log(f"[MINISTRY][DEBUG] officer nickname score={score:.3f}")
-            cv2.imwrite(
-                f"debug/ministry/roi_officer_nickname_score_{score:.3f}.png",
-                roi
-            )
     
         return name is not None and score >= 0.90
 
@@ -385,7 +397,7 @@ class MinistryFlow:
             and hasattr(self, "started_ts")
             and time.time() - self.started_ts > 220
         ):
-            self.log("[MINISTRY] watchdog timeout → reset")
+            self.log(f"[MINISTRY][WATCHDOG] timeout in state={self.state.name}")
             self.xy_read = False
             self.state = MinistryState.IDLE
             WORKFLOW_MANAGER.release(Workflow.MINISTRY)
@@ -396,25 +408,14 @@ class MinistryFlow:
             adb_keyevent(4)
             time.sleep(0.3)
             adb_keyevent(4)
+            time.sleep(0.3)
+            self._tap_template(img, "go_hq")
             return
 
         if self.state == MinistryState.DONE:
             return
         if self.state == MinistryState.IDLE or not self._cooldown_ok():
             return
-        def tap_template(key, next_state=None, offset=(0, 0), score_thr=THR):
-            name, score, loc, hw = match_any(img, self.templates[key])
-            if name and score >= score_thr:
-                cx = loc[0] + hw[1] // 2 + offset[0]
-                cy = loc[1] + hw[0] // 2 + offset[1]
-                adb_tap(cx, cy)
-                time.sleep(0.4)
-                self.log(f"[MINISTRY] tap {key} score={score:.3f}")
-                if next_state:
-                    self.state = next_state
-                self._mark_action()
-                return True
-            return False
 
         def tap_and_next(x, y, next_state):
             adb_tap(x, y)
@@ -424,30 +425,30 @@ class MinistryFlow:
 
         # --- Step machine below ---
         if self.state == MinistryState.TAP_MAP:
-            if tap_template("map", MinistryState.TAP_SEARCH):
+            if self._tap_template(img, "map", MinistryState.TAP_SEARCH):
                 return
 
         if self.state == MinistryState.TAP_SEARCH:
-            if tap_template("search", MinistryState.TAP_SPECIAL):
+            if self._tap_template(img, "search", MinistryState.TAP_SPECIAL):
                 return
 
         if self.state == MinistryState.TAP_SPECIAL:
-            if tap_template("special", MinistryState.TAP_GO):
+            if self._tap_template(img, "special", MinistryState.TAP_GO):
                 return
 
         if self.state == MinistryState.TAP_GO:
-            if tap_template("go_capital", MinistryState.TAP_CENTER):
+            if self._tap_template(img, "go_capital", MinistryState.TAP_CENTER):
                 return
 
         if self.state == MinistryState.TAP_CENTER:
             tap_and_next(*CENTER_SCREEN, MinistryState.TAP_PALACE)
 
         if self.state == MinistryState.TAP_PALACE:
-            if tap_template("pres_palace", MinistryState.TAP_POSITION):
+            if self._tap_template(img, "pres_palace", MinistryState.TAP_POSITION):
                 return
 
         if self.state == MinistryState.TAP_POSITION:
-            if tap_template("position", MinistryState.TAP_CONSTRUCTION):
+            if self._tap_template(img, "position", MinistryState.TAP_CONSTRUCTION):
                 return
 
         if self.state == MinistryState.TAP_CONSTRUCTION:
@@ -456,11 +457,11 @@ class MinistryFlow:
                 if self.returning_to_construction
                 else MinistryState.READ_X
             )
-            if tap_template("sec_constr", next_state):
+            if self._tap_template(img, "sec_constr", next_state):
                 return
 
         if self.state == MinistryState.READ_X:
-            time.sleep(0.2)
+            time.sleep(0.3)
             if self._precheck_exit(img):
                 self.state = MinistryState.READ_APPLICATION_NOTE
                 self._mark_action()
@@ -522,7 +523,7 @@ class MinistryFlow:
             return
 
         if self.state == MinistryState.TAP_SCIENCE:
-            if tap_template("sec_science", MinistryState.READ_Y):
+            if self._tap_template(img, "sec_science", MinistryState.READ_Y):
                 return
 
         if self.state == MinistryState.READ_Y:
@@ -580,7 +581,7 @@ class MinistryFlow:
         # APPLY SCIENCE
         # -------------------------
         if self.state == MinistryState.APPLY_SCIENCE:
-            if tap_template("apply", score_thr=0.6):
+            if self._tap_template(img, "apply", score_thr=0.6):
                 self.state = MinistryState.CONFIRM
                 self._mark_action()
             return
@@ -623,7 +624,7 @@ class MinistryFlow:
                 return
         
             # 4. solo ora cerco Apply
-            if tap_template("apply", score_thr=0.6):
+            if self._tap_template(img, "apply", score_thr=0.6):
                 self.state = MinistryState.CONFIRM
                 self._mark_action()
             return
@@ -645,7 +646,7 @@ class MinistryFlow:
                 return
         
             # caso 3: compare davvero il bottone Confirm
-            if tap_template("confirm", MinistryState.READ_APPLICATION_NOTE):
+            if self._tap_template(img, "confirm", MinistryState.READ_APPLICATION_NOTE):
                 return
         
             # altrimenti: aspetta frame successivo (NO timeout qui)
@@ -666,7 +667,7 @@ class MinistryFlow:
         
             # --- FALLBACK OBBLIGATORIO ---
             if start_ts is None:
-                self.log("[MINISTRY] application note non leggibile → cooldown forzato 30 min")
+                self.log("[MINISTRY] application note non leggibile → cooldown forzato 10 min")
                 cooldown = int(time.time()) + 600
                 self.cooldown_until = cooldown
             else:
@@ -680,16 +681,16 @@ class MinistryFlow:
 
         if self.state == MinistryState.EXIT_MINISTRY:
             adb_tap(*BOTTOM_LEFT)
-            time.sleep(0.2)
+            time.sleep(0.4)
             adb_tap(*BOTTOM_LEFT)
-            time.sleep(0.2)
+            time.sleep(0.4)
             adb_tap(*BOTTOM_LEFT)
             self._mark_action()
             self.state = MinistryState.BACK_TO_HQ
             return
 
         if self.state == MinistryState.BACK_TO_HQ:
-            if tap_template("go_hq"):
+            if self._tap_template(img, "go_hq"):
                 self.xy_read = False
                 self.x = 0
                 self.y = 0

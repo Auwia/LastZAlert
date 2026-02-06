@@ -7,6 +7,11 @@ PORT="5555"
 # Avvia adb server se necessario
 adb start-server
 
+echo "Riavvio ADB in TCP..."
+adb tcpip $PORT
+
+sleep 2
+
 # Connetti al dispositivo
 adb connect $DEVICE_IP:$PORT
 

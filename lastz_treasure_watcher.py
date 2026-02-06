@@ -35,6 +35,14 @@ forziere_flow_holder = {"flow": None}
 # Discord webhook (ATTENZIONE: se pubblico, meglio metterlo in env var)
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1446565181265154190/pL-0gcgP09RlQqnqHqQDIdQqm505tqa744is2R_1eGA3Had4OXmhPgQrTLYXYzaMld0S"
 
+# ============================================================
+# VIDEO RECORDING (OPZIONALE)
+# ============================================================
+
+ENABLE_TREASURE_RECORDING = True      # ⬅ ON / OFF
+TREASURE_RECORD_SECONDS  = 300         # durata max 5 minuti
+TREASURE_RECORD_DIR      = "debug/recordings"
+
 # Template match threshold
 MATCH_THRESHOLD_TREASURE = 0.75
 MATCH_THRESHOLD_HEAL     = 0.85
@@ -54,6 +62,7 @@ TEMPLATES_HELP_DIR      = "help"
 HEAL_FINISHED_DIR       = "heal_finished"
 DEBUG_DIR               = "debug"
 os.makedirs(DEBUG_DIR, exist_ok=True)
+os.makedirs(TREASURE_RECORD_DIR, exist_ok=True)
 
 # Heal config
 HEAL_BATCH_DEFAULT = 100
@@ -357,6 +366,38 @@ def forziere_flow_tick():
     if img is not None:
         flow.step(img)
 
+def start_treasure_recording(tag: str = "treasure"):
+    if not ENABLE_TREASURE_RECORDING:
+        return
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    remote_path = f"/sdcard/{tag}_{ts}.mp4"
+    local_path  = os.path.join(TREASURE_RECORD_DIR, f"{tag}_{ts}.mp4")
+
+    def _record():
+        try:
+            print(f"[REC] start screenrecord → {remote_path}")
+            subprocess.run(
+                [
+                    ADB_CMD, "shell", "screenrecord",
+                    f"--time-limit={TREASURE_RECORD_SECONDS}",
+                    "--bit-rate=4000000",
+                    remote_path
+                ],
+                timeout=TREASURE_RECORD_SECONDS + 5
+            )
+
+            print("[REC] pull video")
+            subprocess.run([ADB_CMD, "pull", remote_path, local_path], timeout=30)
+            subprocess.run([ADB_CMD, "shell", "rm", remote_path], timeout=10)
+
+            print(f"[REC] saved → {local_path}")
+
+        except Exception as e:
+            print("[REC] error:", e)
+
+    threading.Thread(target=_record, daemon=True).start()
+
 # ============================================================
 # THREAD 1: TREASURE WATCHER
 # ============================================================
@@ -396,6 +437,8 @@ def treasure_watcher(stop_evt: threading.Event):
         if hits >= CONSECUTIVE_HITS_REQUIRED_TREASURE and (now - last_alert) >= MIN_SECONDS_BETWEEN_TREASURE_ALERTS:
             log_event(f"[TREASURE] RILEVATO {name} score={score:.3f} thr={MATCH_THRESHOLD_TREASURE}")
             send_notification(f"🎁 Tesoro rilevato! ({name}) score={score:.2f}")
+
+            start_treasure_recording("treasure")
 
             WORKFLOW_MANAGER.force(Workflow.TREASURE)
 
@@ -646,15 +689,16 @@ def simple_event_watcher(stop_evt):
 
             if score >= cfg["threshold"]:
                 if cfg.get("tap") == "OUTSIDE":
-                    adb_keyevent(4)
+                    #adb_keyevent(4)
+                    tap_outside_popup(img)
                 else:
                     cx, cy = tap_match_in_fullscreen(roi_coords, loc, hw)
-                log_event(f"[{name.upper()}] score: {score} threshold: {cfg['threshold']} tap @ {cx},{cy}")
+                    log_event(f"[{name.upper()}] score: {score} threshold: {cfg['threshold']} tap @ {cx},{cy}")
+
                 last_fire[name] = now
                 did_anything = True
                 time.sleep(1.0)
                 last_generic_fire = now
-
 
         WORKFLOW_MANAGER.release(Workflow.GENERIC)
 
@@ -712,7 +756,7 @@ def treasure_watcher_loop(stop_evt):
             if WORKFLOW_MANAGER.acquire(Workflow.TREASURE):
                 cx, cy = tap_match_in_fullscreen(coords, loc, hw)
                 log_event(f"[TREASURE] tap icon @ {cx},{cy} -> open chat")
-                time.sleep(1)
+                time.sleep(1.5)
 
             TREASURE_FLOW_EVENT.set()
             WORKFLOW_MANAGER.preempt_lower_priority(Workflow.TREASURE)
@@ -922,7 +966,14 @@ def simple_event_watcher_tick(stop_evt):
             log_event(f"[{name.upper()}] best={name_t} score={score:.3f} thr={cfg['threshold']:.2f}")
 
         if score >= cfg["threshold"]:
-            cx, cy = tap_match_in_fullscreen(roi_coords, loc, hw)
+            if cfg.get("tap") == "OUTSIDE":
+                cx, cy = tap_outside_popup(img) 
+            elif cfg.get("tap") == "center":
+                cx, cy = (img.shape[1] // 2, img.shape[0] // 2)
+                adb_tap(cx, cy)
+            else:
+                cx, cy = tap_match_in_fullscreen(roi_coords, loc, hw)
+        
             log_event(f"[{name.upper()}] score: {score} threshold: {cfg['threshold']} tap @ {cx},{cy}")
             _last_fire_simple_event[name] = now
             _last_generic_fire = now
@@ -1061,7 +1112,7 @@ def main():
                    if time.time() >= ministry_flow.cooldown_until:
                        mflow.trigger()
                ministry_flow_tick()
-#                   print("\n[!] Ministry flow Disabled!")
+#               print("\n[!] Ministry flow Disabled!")
 
                # 8. Forziere
                if (

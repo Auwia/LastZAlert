@@ -33,7 +33,7 @@ SIMPLE_EVENTS = {
         "templates": "confirm_popup",
         "roi": (0.0, 1.0, 0.0, 1.0),
         "threshold": 0.9,
-        "cooldown": 10,
+        "cooldown": 2,
         "tap": "OUTSIDE",
         "log": "[CONFIRM_POPUP]",
     },
