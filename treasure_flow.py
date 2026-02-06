@@ -38,11 +38,10 @@ MAGNIFIER_DIR   = os.path.join(TEMPL_DIR, "magnifier")
 MARCH_DIR       = os.path.join(TEMPL_DIR, "march")
 
 # Match thresholds (tarali)
-THR_CHAT_LINK   = 0.45
+THR_CHAT_LINK   = 0.75
 THR_HELI        = 0.45
 THR_MAGNIFIER   = 0.45
 THR_MARCH       = 0.45
-THR_CHAT_LINK_EXACT = 0.02
 
 # Loop / timings
 FLOW_TICK_SEC = 0.25
@@ -280,7 +279,7 @@ class TreasureFlow:
         self.t_heli = load_templates_from_dir(HELI_DIR)
         self.t_mag  = load_templates_from_dir(MAGNIFIER_DIR)
         self.t_march= load_templates_from_dir(MARCH_DIR)
-        self.t_chat_ui = load_templates_from_dir(os.path.join(TEMPL_DIR, "chat-ui"))
+        self.t_chat_ui = load_templates_from_dir(os.path.join(TEMPL_DIR, "chat_ui"))
 
         if not _HAS_TESSERACT:
             self.log("[TREASURE-FLOW] OCR timer: pytesseract NON disponibile (spam <=5s disabilitato)")
@@ -346,6 +345,15 @@ class TreasureFlow:
             # --- CHECK: siamo ancora in chat? ---
             roi_chat_ui, _ = crop_roi(img, (0.0, 1.0, 0.0, 1.0))  # zona input chat
             name_ui, score_ui, *_ = match_any(roi_chat_ui, self.t_chat_ui)
+
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            debug_dir = "debug/chat_ui"
+            os.makedirs(debug_dir, exist_ok=True)
+        
+            fname = f"{debug_dir}/chat_ui_{name_ui}_{score_ui:.3f}_{ts}.png"
+            cv2.imwrite(fname, roi_chat_ui)
+ 
+            self.log(f"[DEBUG][CHAT_UI] match={name_ui} score={score_ui:.3f} dump={fname}")
             
             if not (name_ui and score_ui >= 0.6):
                 # non siamo più in chat → il link ha funzionato
@@ -363,7 +371,7 @@ class TreasureFlow:
 
             self.log(f"[DEBUG] ROI_CHAT_LINK: x={coords[0]}, y={coords[1]}, w={roi.shape[1]}, h={roi.shape[0]}")
 
-            name, score, loc, hw = match_any_exact_sqdiff(roi, self.t_chat)
+            name, score, loc, hw = match_any(roi, self.t_chat)
             if name:
                 self.log(f"[DEBUG] Match trovato: template={name}, score={score:.3f}, pos={loc}, dim={hw}")
             else:

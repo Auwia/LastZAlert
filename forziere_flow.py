@@ -130,7 +130,8 @@ class ForziereFlow:
                 )
                 time.sleep(0.8)
                 self.log(f"[FORZIERE-FLOW] forziere PIENO score={score:.3f}")
-                self.state = ForziereState.TAP_CLAIM
+        #        self.state = ForziereState.TAP_CLAIM
+                self.state = ForziereState.TAP_COLLECT
                 self.last_progress_ts = time.time()
                 self._mark()
                 return
@@ -143,23 +144,23 @@ class ForziereFlow:
         # 2) tap claim
         # ----------------------------------------------------
 
-        if self.state == ForziereState.TAP_CLAIM:
-            roi, (ox, oy) = crop_roi(img, ROI_COLLECT)  # full screen ok
-            name, score, loc, hw = match_any(roi, self.templates["claim"])
-        
-            self.log(f"[FORZIERE-FLOW][DEBUG] claim score={score:.3f}")
-        
-            if name and score >= 0.75:
-                adb_tap(
-                    ox + loc[0] + hw[1] // 2,
-                    oy + loc[1] + hw[0] // 2
-                )
-                time.sleep(0.8)
-                self.log("[FORZIERE-FLOW] CLAIM")
-                self.state = ForziereState.TAP_COLLECT
-                self.last_progress_ts = time.time()
-                self._mark()
-            return
+        #if self.state == ForziereState.TAP_CLAIM:
+        #    roi, (ox, oy) = crop_roi(img, ROI_COLLECT)  # full screen ok
+        #    name, score, loc, hw = match_any(roi, self.templates["claim"])
+        #
+        #    self.log(f"[FORZIERE-FLOW][DEBUG] claim score={score:.3f}")
+        #
+        #    if name and score >= 0.75:
+        #        adb_tap(
+        #            ox + loc[0] + hw[1] // 2,
+        #            oy + loc[1] + hw[0] // 2
+        #        )
+        #        time.sleep(0.8)
+        #        self.log("[FORZIERE-FLOW] CLAIM")
+        #        self.state = ForziereState.TAP_COLLECT
+        #        self.last_progress_ts = time.time()
+        #        self._mark()
+        #    return
 
 
         # ----------------------------------------------------
@@ -169,6 +170,7 @@ class ForziereFlow:
             self.last_progress_ts = time.time()
             roi, (ox, oy) = crop_roi(img, ROI_COLLECT)
             name, score, loc, hw = match_any(roi, self.templates["collect"])
+            self.log(f"[FORZIERE-FLOW][DEBUG] collect score={score:.3f}")
 
             if name and score >= THR_COLLECT:
                 adb_tap(
@@ -181,7 +183,7 @@ class ForziereFlow:
                 self._mark()
                 return
 
-            self.log("[FORZIERE-FLOW] claim non trovato → abort")
+            self.log("[FORZIERE-FLOW] collect non trovato → abort")
             self.state = ForziereState.IDLE
             WORKFLOW_MANAGER.release(Workflow.FORZIERE)
             adb_tap(*BACK_TAP)
