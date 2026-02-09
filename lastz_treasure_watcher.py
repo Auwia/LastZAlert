@@ -65,7 +65,7 @@ os.makedirs(DEBUG_DIR, exist_ok=True)
 os.makedirs(TREASURE_RECORD_DIR, exist_ok=True)
 
 # Heal config
-HEAL_BATCH_DEFAULT = 100
+HEAL_BATCH_DEFAULT = 250
 HEAL_BATCH_ALREADY_SET = False
 
 # HQ upgrade

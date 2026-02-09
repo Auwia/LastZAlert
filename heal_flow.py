@@ -29,7 +29,7 @@ FIRST_ROW_LABEL_XY = (1420, 820)
 HOSPITAL_ICON_XY = (960, 1080) 
 HEAL_BUTTON_XY = (900, 2120)
 FIRST_ROW_LABEL_ROI = (0.78, 0.93, 0.33, 0.42)
-HEAL_BATCH = 50
+HEAL_BATCH = 250
 
 # ============================================================
 # ADB HELPERS (STILE VECCHIO – GLOBALI)

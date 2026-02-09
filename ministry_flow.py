@@ -314,24 +314,29 @@ class MinistryFlow:
         return True
 
     def _is_current_officer(self, img) -> bool:
-        """
-        Rileva se l'utente è GIÀ ufficiale tramite nickname (image match).
-        """
-        if DEBUG:
-            self.log("[MINISTRY][DEBUG] _is_current_officer CALLED")
-            cv2.imwrite("debug/ministry/roi_officer_nickname_LAST.png", img)
-
-        name, score, _, _ = match_any(img, self.templates["nickname"])
+        roi, coords = crop_roi(img, ROI_OFFICER_NICKNAME)
+    
+        if roi is None or roi.size == 0:
+            return False
+    
+        name, score, _, _ = match_any(roi, self.templates["nickname"])
     
         if DEBUG:
-            self.log(f"[MINISTRY][DEBUG] officer nickname score={score:.3f}")
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            cv2.imwrite(
+                f"debug/ministry/nickname_roi_{name}_{score:.3f}_{ts}.png",
+                roi
+            )
+            self.log(f"[MINISTRY][DEBUG] nickname match={name} score={score:.3f}")
     
-        return name is not None and score >= 0.90
+        return name is not None and score >= 0.85
 
     def _application_note_visible(self, img) -> bool:
         roi, _ = crop_roi(img, ROI_APPLICATION_NOTE)
         if roi is None or roi.size == 0:
             return False
+        
+        cv2.imwrite(f"debug/ministry/application_note_visibile.png", roi)
         
         txt = _ocr_text(roi)
         return "will take office" in txt.lower()
