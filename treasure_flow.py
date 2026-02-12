@@ -38,7 +38,7 @@ MAGNIFIER_DIR   = os.path.join(TEMPL_DIR, "magnifier")
 MARCH_DIR       = os.path.join(TEMPL_DIR, "march")
 
 # Match thresholds (tarali)
-THR_CHAT_LINK   = 0.75
+THR_CHAT_LINK   = 0.67
 THR_HELI        = 0.45
 THR_MAGNIFIER   = 0.45
 THR_MARCH       = 0.45
@@ -383,15 +383,18 @@ class TreasureFlow:
                         f"[TREASURE-FLOW] chat link debole (score={score:.3f}), attendo nuovo frame"
                     )
                     return
-                #cx, cy = tap_match_in_fullscreen(coords, loc, hw)
 
                 xs, ys, _, _ = coords
-                cx = xs + loc[0] + int(hw[1] * 0.88)  # 88% della larghezza = zona "State"
-                cy = ys + loc[1] + hw[0] // 2         # centro verticale
+
+                #cx = xs + loc[0] + int(hw[1] * 0.88)  # 88% della larghezza = zona "State"
+                #cy = ys + loc[1] + hw[0] // 2         # centro verticale
+
+                cx, cy = tap_match_in_fullscreen(coords, loc, hw)
                 adb_tap(cx, cy)
 
                 self._mark_action()
                 self.log(f"[TREASURE-FLOW] chat link tap @ {cx},{cy} score={score:.3f} thr={THR_CHAT_LINK}")
+                time.sleep(1.0)
                 self.state = FlowState.IN_MAP_FIND_HELI
             else:
                     self.log(f"[TREASURE-FLOW] link non ancora valido: score={score:.3f} < thr={THR_CHAT_LINK}")
@@ -511,6 +514,7 @@ class TreasureFlow:
             cx, cy = tap_center_of_roi(img, ROI_HEADQUARTERS_BTN)
             self._mark_action()
             self.log(f"[TREASURE-FLOW] tap Headquarters @ {cx},{cy} -> IDLE")
+            stop_treasure_recording()
             self.state = FlowState.IDLE
             WORKFLOW_MANAGER.release(Workflow.TREASURE)
             self.log("[WF] TREASURE rilasciato")

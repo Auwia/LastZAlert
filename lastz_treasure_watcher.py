@@ -85,6 +85,12 @@ SCREENSHOT_ERROR_COUNT = 0
 SCREENSHOT_ERROR_MAX = 3
 SCREENSHOT_LOCK = threading.Lock()
 
+REC_PROCESS = None
+REC_REMOTE_PATH = None
+REC_LOCAL_PATH = None
+REC_ACTIVE = False
+REC_LOCK = threading.Lock()
+
 TREASURE_FLOW_EVENT = threading.Event()
 
 # ============================================================
@@ -366,7 +372,73 @@ def forziere_flow_tick():
     if img is not None:
         flow.step(img)
 
+def stop_treasure_recording():
+    global REC_PROCESS, REC_REMOTE_PATH, REC_LOCAL_PATH, REC_ACTIVE
+
+    with REC_LOCK:
+        if not REC_ACTIVE:
+            return
+
+        print("[REC] STOP requested")
+
+        try:
+            # 1. termina processo locale
+            if REC_PROCESS:
+                REC_PROCESS.terminate()
+                REC_PROCESS.wait(timeout=5)
+
+        except Exception:
+            pass
+
+        # 2. kill eventuale screenrecord sul device
+        subprocess.run([ADB_CMD, "shell", "pkill", "screenrecord"])
+
+        time.sleep(1)
+
+        # 3. pull file se esiste
+        if REC_REMOTE_PATH:
+            print("[REC] pulling file...")
+            subprocess.run([ADB_CMD, "pull", REC_REMOTE_PATH, REC_LOCAL_PATH])
+            subprocess.run([ADB_CMD, "shell", "rm", REC_REMOTE_PATH])
+            print(f"[REC] SAVED → {REC_LOCAL_PATH}")
+
+        REC_PROCESS = None
+        REC_REMOTE_PATH = None
+        REC_LOCAL_PATH = None
+        REC_ACTIVE = False
+
 def start_treasure_recording(tag: str = "treasure"):
+    global REC_PROCESS, REC_REMOTE_PATH, REC_LOCAL_PATH, REC_ACTIVE
+
+    if not ENABLE_TREASURE_RECORDING:
+        return
+
+    with REC_LOCK:
+        if REC_ACTIVE:
+            print("[REC] già attivo, skip")
+            return
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        REC_REMOTE_PATH = f"/sdcard/{tag}_{ts}.mp4"
+        REC_LOCAL_PATH  = os.path.join(TREASURE_RECORD_DIR, f"{tag}_{ts}.mp4")
+
+        print(f"[REC] START → {REC_REMOTE_PATH}")
+
+        REC_PROCESS = subprocess.Popen(
+            [
+                ADB_CMD, "shell", "screenrecord",
+                f"--time-limit={TREASURE_RECORD_SECONDS}",
+                "--bit-rate=4000000",
+                REC_REMOTE_PATH
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+
+        REC_ACTIVE = True
+
+def start_treasure_recording_bkp(tag: str = "treasure"):
+
     if not ENABLE_TREASURE_RECORDING:
         return
 
@@ -448,9 +520,7 @@ def treasure_watcher(stop_evt: threading.Event):
                 log_event(f"[TREASURE] tap icon @ {cx},{cy} -> open chat")
 
             TREASURE_FLOW_EVENT.set()
-
             WORKFLOW_MANAGER.preempt_lower_priority(Workflow.TREASURE)
-
             treasure_flow_watcher.flow.trigger()
 
             last_alert = now
@@ -752,7 +822,10 @@ def treasure_watcher_loop(stop_evt):
             log_event(f"[TREASURE] RILEVATO {name} score={score:.3f}")
             send_notification(f"🎁 Tesoro rilevato! ({name})")
 
+            start_treasure_recording("treasure")
+
             WORKFLOW_MANAGER.force(Workflow.TREASURE)
+
             if WORKFLOW_MANAGER.acquire(Workflow.TREASURE):
                 cx, cy = tap_match_in_fullscreen(coords, loc, hw)
                 log_event(f"[TREASURE] tap icon @ {cx},{cy} -> open chat")
@@ -1056,6 +1129,7 @@ def main():
         except KeyboardInterrupt:
             print("\n[!] Stop richiesto.")
             stop_evt.set()
+            stop_treasure_recording()
             time.sleep(1)
 
     else:
