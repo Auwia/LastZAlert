@@ -58,6 +58,7 @@ class ForziereFlow:
         self.last_progress_ts = 0.0
         self.next_available_ts = 0.0
         self.dynamic_cooldown = 60
+        self.claim_wait_start = 0.0
 
         self.templates = {
             "forziere_full": load_templates("forziere"),
@@ -130,8 +131,10 @@ class ForziereFlow:
                 )
                 time.sleep(0.8)
                 self.log(f"[FORZIERE-FLOW] forziere PIENO score={score:.3f}")
-        #        self.state = ForziereState.TAP_CLAIM
-                self.state = ForziereState.TAP_COLLECT
+
+                self.state = ForziereState.TAP_CLAIM
+                self.claim_wait_start = time.time()
+
                 self.last_progress_ts = time.time()
                 self._mark()
                 return
@@ -141,27 +144,40 @@ class ForziereFlow:
             return
 
         # ----------------------------------------------------
-        # 2) tap claim
+        # 2) tap claim (opzionale con timeout 5s)
         # ----------------------------------------------------
-
-        #if self.state == ForziereState.TAP_CLAIM:
-        #    roi, (ox, oy) = crop_roi(img, ROI_COLLECT)  # full screen ok
-        #    name, score, loc, hw = match_any(roi, self.templates["claim"])
-        #
-        #    self.log(f"[FORZIERE-FLOW][DEBUG] claim score={score:.3f}")
-        #
-        #    if name and score >= 0.75:
-        #        adb_tap(
-        #            ox + loc[0] + hw[1] // 2,
-        #            oy + loc[1] + hw[0] // 2
-        #        )
-        #        time.sleep(0.8)
-        #        self.log("[FORZIERE-FLOW] CLAIM")
-        #        self.state = ForziereState.TAP_COLLECT
-        #        self.last_progress_ts = time.time()
-        #        self._mark()
-        #    return
-
+        if self.state == ForziereState.TAP_CLAIM:
+        
+            roi, (ox, oy) = crop_roi(img, ROI_COLLECT)
+            name, score, loc, hw = match_any(roi, self.templates["claim"])
+        
+            self.log(f"[FORZIERE-FLOW][DEBUG] claim score={score:.3f}")
+        
+            # Se troviamo CLAIM → tap
+            if name and score >= 0.75:
+                adb_tap(
+                    ox + loc[0] + hw[1] // 2,
+                    oy + loc[1] + hw[0] // 2
+                )
+                time.sleep(0.8)
+                self.log("[FORZIERE-FLOW] CLAIM tapped")
+        
+                self.state = ForziereState.TAP_COLLECT
+                self.last_progress_ts = time.time()
+                self._mark()
+                return
+        
+            # Se non trovato ma siamo ancora dentro 5s → continua a cercare
+            if (time.time() - self.claim_wait_start) < 5:
+                self.log(f"[FORZIERE-FLOW] claim wait {time.time() - self.claim_wait_start:.1f}s")
+                return
+        
+            # Timeout scaduto → vai avanti comunque
+            self.log("[FORZIERE-FLOW] CLAIM non presente → skip")
+            self.state = ForziereState.TAP_COLLECT
+            self.last_progress_ts = time.time()
+            self._mark()
+            return
 
         # ----------------------------------------------------
         # 3) tap collect
