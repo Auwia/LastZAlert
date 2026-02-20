@@ -41,7 +41,11 @@ DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1446565181265154190/pL-0
 
 ENABLE_TREASURE_RECORDING = True      # ⬅ ON / OFF
 TREASURE_RECORD_SECONDS  = 300         # durata max 5 minuti
-TREASURE_RECORD_DIR      = "debug/recordings"
+TREASURE_RECORD_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "debug",
+    "recordings"
+)
 
 # Template match threshold
 MATCH_THRESHOLD_TREASURE = 0.75
@@ -92,6 +96,14 @@ REC_ACTIVE = False
 REC_LOCK = threading.Lock()
 
 TREASURE_FLOW_EVENT = threading.Event()
+
+SCIENCE_ICON_DIR = "ministry/science_icon"
+SCIENCE_ICON_ROI = (0.0, 0.50, 0.0, 0.35)
+SCIENCE_ICON_THRESHOLD = 0.80
+
+CONSTRUCTION_ICON_DIR = "ministry/construction_icon"
+CONSTRUCTION_ICON_ROI = (0.0, 0.50, 0.0, 0.35)
+CONSTRUCTION_ICON_THRESHOLD = 0.80
 
 # ============================================================
 # ROI (FRAZIONI dello schermo: x1,x2,y1,y2)
@@ -415,8 +427,14 @@ def start_treasure_recording(tag: str = "treasure"):
 
     with REC_LOCK:
         if REC_ACTIVE:
-            print("[REC] già attivo, skip")
-            return
+            # Controlla se il processo è davvero vivo
+            if REC_PROCESS and REC_PROCESS.poll() is None:
+                print("[REC] già attivo, skip")
+                return
+            else:
+                print("[REC] flag attivo ma processo morto → reset")
+                REC_ACTIVE = False
+                REC_PROCESS = None
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         REC_REMOTE_PATH = f"/sdcard/{tag}_{ts}.mp4"
@@ -511,6 +529,7 @@ def treasure_watcher(stop_evt: threading.Event):
             send_notification(f"🎁 Tesoro rilevato! ({name}) score={score:.2f}")
 
             start_treasure_recording("treasure")
+            threading.Timer(TREASURE_RECORD_SECONDS + 5, stop_treasure_recording).start()
 
             WORKFLOW_MANAGER.force(Workflow.TREASURE)
 
@@ -1088,6 +1107,16 @@ def ministry_flow_tick():
     if img is not None:
         flow.step(img)
 
+def is_science_icon_visible(img):
+    roi, coords = crop_roi(img, SCIENCE_ICON_ROI)
+    name, score, loc, hw = match_any(roi, SCIENCE_ICON_TEMPLATES)
+    return score >= SCIENCE_ICON_THRESHOLD
+
+def is_construction_icon_visible(img):
+    roi, coords = crop_roi(img, CONSTRUCTION_ICON_ROI)
+    name, score, loc, hw = match_any(roi, CONSTRUCTION_ICON_TEMPLATES)
+    return score >= CONSTRUCTION_ICON_THRESHOLD
+
 # ============================================================
 # MAIN
 # ============================================================
@@ -1096,7 +1125,10 @@ def log(msg):
     print(msg)
 
 def main():
-    ministry_flow = MinistryFlow()
+    global SCIENCE_ICON_TEMPLATES, CONSTRUCTION_ICON_TEMPLATES
+
+    SCIENCE_ICON_TEMPLATES = load_templates_from_dir(SCIENCE_ICON_DIR)
+    CONSTRUCTION_ICON_TEMPLATES = load_templates_from_dir(CONSTRUCTION_ICON_DIR)
 
     print("=== Last Z Bot (Treasure + Heal, threaded) ===")
 
@@ -1134,7 +1166,7 @@ def main():
 
     else:
         threading.Thread(target=screenshot_producer, args=(stop_evt,), daemon=True).start()
-        treasure_flow_watcher.flow = TreasureFlow(log_fn=log_event)
+        treasure_flow_watcher.flow = TreasureFlow(log_fn=log_event, stop_record_fn=stop_treasure_recording)
         donation_flow_holder["flow"] = DonationFlow(log_event)
         ministry_flow_holder["flow"] = MinistryFlow(log_fn=log_event)  
         forziere_flow_holder["flow"] = ForziereFlow(log_event)
@@ -1182,9 +1214,17 @@ def main():
                donation_flow_tick()
 
                # 7. Ministry
-               if (mflow is not None and mflow.state.name == "IDLE" and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC) and WORKFLOW_MANAGER.can_run(Workflow.MINISTRY)):
-                   if time.time() >= ministry_flow.cooldown_until:
-                       mflow.trigger()
+               if (mflow is not None and mflow.state.name == "IDLE" and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC) and WORKFLOW_MANAGER.can_run(Workflow.MINISTRY) and not WORKFLOW_MANAGER.is_active(Workflow.MINISTRY)):
+                   if time.time() >= mflow.cooldown_until:
+                       img = load_image(SCREENSHOT_PATH)
+                       if img is not None:
+                           science_visible = is_science_icon_visible(img)
+                           construction_visible = is_construction_icon_visible(img)
+                       
+                           if not science_visible and not construction_visible:
+                               mflow.trigger()
+                           else:
+                               log_event("[MINISTRY] officer icon visibile → skip trigger")
                ministry_flow_tick()
 #               print("\n[!] Ministry flow Disabled!")
 

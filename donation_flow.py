@@ -228,15 +228,39 @@ class DonationFlow:
             txt = _ocr_text(roi)
 
             attempts = _parse_attempts(txt)
+
+            if attempts < 0:
+                self.log(f"[DONATION-FLOW] OCR attempts FAILED '{txt.strip()}', retry")
+                self._mark_action()
+                return
             
             if attempts == 0:
                 self.log("[DONATION-FLOW] no attempts left → read cooldown")
                 self.state = DonationState.READ_COOLDOWN
                 self._mark_action()
                 return
+
+            MAX_ATTEMPTS = 20
+            RECHARGE_MINUTES = 17
             
-            if attempts < 0:
-                self.log(f"[DONATION-FLOW] OCR attempts FAILED '{txt.strip()}', retry")
+            if attempts < MAX_ATTEMPTS:
+                missing = MAX_ATTEMPTS - attempts
+                wait_seconds = missing * RECHARGE_MINUTES * 60
+            
+                self.next_allowed = time.time() + wait_seconds
+                self.log(
+                    f"[DONATION-FLOW] attempts={attempts}/20 → next check in "
+                    f"{wait_seconds//60} min"
+                )
+            
+                # chiudi UI
+                cleanup_coords = [(100, 2400), (100, 2400), (100, 2400)]
+                for i, (x, y) in enumerate(cleanup_coords):
+                    time.sleep(0.4)
+                    adb_tap(x, y)
+            
+                self.state = DonationState.IDLE
+                WORKFLOW_MANAGER.release(Workflow.DONATION)
                 self._mark_action()
                 return
             

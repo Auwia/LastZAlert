@@ -60,7 +60,8 @@ TIMER_MISSING_TICKS_TO_FINISH = 12  # 12 * 0.25 = ~3 sec
 # ============================================================
 
 # Link "Explore Treasure" nella chat: zona chat centrale
-ROI_CHAT_LINK = (0.0, 1.0, 0.0, 1.0)
+#ROI_CHAT_LINK = (0.0, 1.0, 0.0, 1.0)
+ROI_CHAT_LINK = (0.02, 0.98, 0.18, 0.92)
 
 # Elicottero sulla mappa: spesso centro/basso
 ROI_HELI = (0.0, 1.0, 0.0, 1.0) #backup: (0.15, 0.85, 0.25, 0.80)
@@ -268,8 +269,9 @@ class TreasureFlow:
       flow.trigger()  # quando il treasure è stato rilevato
       flow.step(img)  # chiamata ad ogni tick con lo screenshot corrente
     """
-    def __init__(self, log_fn=print):
+    def __init__(self, log_fn=print, stop_record_fn=None):
         self.log = log_fn
+        self.stop_record_fn = stop_record_fn
         self.state = FlowState.IDLE
         self.last_action_ts = 0.0
         self.timer_missing_ticks = 0
@@ -451,8 +453,7 @@ class TreasureFlow:
             roi, coords = crop_roi(img, ROI_MARCH)
             name, score, loc, hw = match_any(roi, self.t_march)
             if name and score >= THR_MARCH:
-                #cx, cy = tap_match_in_fullscreen(coords, loc, hw) --backup
-                cx, cy = tap_center_of_roi(img, ROI_MARCH)
+                cx, cy = tap_match_in_fullscreen(coords, loc, hw) 
                 self._mark_action()
                 self.log(f"[TREASURE-FLOW] MARCH tap @ {cx},{cy} score={score:.3f} thr={THR_MARCH}")
                 self.state = FlowState.DIGGING_WAIT_TIMER
@@ -514,7 +515,8 @@ class TreasureFlow:
             cx, cy = tap_center_of_roi(img, ROI_HEADQUARTERS_BTN)
             self._mark_action()
             self.log(f"[TREASURE-FLOW] tap Headquarters @ {cx},{cy} -> IDLE")
-            stop_treasure_recording()
+            if self.stop_record_fn:
+                self.stop_record_fn()
             self.state = FlowState.IDLE
             WORKFLOW_MANAGER.release(Workflow.TREASURE)
             self.log("[WF] TREASURE rilasciato")
