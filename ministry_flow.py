@@ -340,7 +340,8 @@ class MinistryFlow:
         
         txt = _ocr_application_note_yellow(roi)
         self.log(f"[MINISTRY] NOTE raw OCR: {repr(txt)}")
-        return "will take office" in txt.lower()
+        #return "will take office" in txt.lower()
+        return _parse_hhmmss(txt) is not None
 
     def _already_applied(self, img) -> bool:
         """
