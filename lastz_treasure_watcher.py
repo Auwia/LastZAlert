@@ -14,6 +14,7 @@ from donation_flow import DonationFlow
 from ministry_flow import MinistryFlow
 from forziere_flow import ForziereFlow
 from heal_flow import HealFlow
+from research_flow import ResearchFlow
 
 import cv2
 import numpy as np
@@ -44,6 +45,7 @@ _last_multi_resource_time = 0
 donation_flow_holder = {"flow": None}
 ministry_flow_holder = {"flow": None}
 forziere_flow_holder = {"flow": None}
+research_flow_holder = {"flow": None}
 
 # Discord webhook (ATTENZIONE: se pubblico, meglio metterlo in env var)
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1446565181265154190/pL-0gcgP09RlQqnqHqQDIdQqm505tqa744is2R_1eGA3Had4OXmhPgQrTLYXYzaMld0S"
@@ -111,12 +113,13 @@ REC_LOCK = threading.Lock()
 TREASURE_FLOW_EVENT = threading.Event()
 
 SCIENCE_ICON_DIR = "ministry/science_icon"
-SCIENCE_ICON_ROI = (0.0, 0.18, 0.0, 0.55)
 SCIENCE_ICON_THRESHOLD = 0.80
 
 CONSTRUCTION_ICON_DIR = "ministry/construction_icon"
-CONSTRUCTION_ICON_ROI = (0.0, 0.50, 0.0, 0.35)
 CONSTRUCTION_ICON_THRESHOLD = 0.80
+
+LEFT_ICON_ROI = (0.00, 0.16, 0.33, 0.82)
+TOP_ICON_ROI = (0.25, 0.75, 0.00, 0.12)
 
 # ============================================================
 # ROI (FRAZIONI dello schermo: x1,x2,y1,y2)
@@ -211,6 +214,15 @@ def check_adb_device() -> bool:
     print("[+] Device:", devices[0])
     return True
 
+def wait_new_frame(delay=0.6):
+    """
+    Aspetta che il gioco aggiorni lo schermo e forza
+    uno screenshot fresco.
+    """
+    time.sleep(delay)
+
+    with SCREENSHOT_LOCK:
+        take_screenshot(SCREENSHOT_PATH)
 
 def take_screenshot(path: str) -> bool:
     try:
@@ -342,6 +354,50 @@ def load_templates_from_dir(directory: str) -> List[Tuple[str, np.ndarray]]:
     log_event(f"[+] Caricati {len(templates)} template da '{directory}'")
     return templates
 
+def match_any_multiscale(roi_img: np.ndarray, templates: List[Tuple[str, np.ndarray]], scales=(0.80,0.90,1.0,1.10,1.20)):
+    best_name = None
+    best_score = 0.0
+    best_loc = (0,0)
+    best_hw = (0,0)
+    best_scale = 1.0
+
+    rh, rw = roi_img.shape[:2]
+
+    for name, tmpl in templates:
+
+        th0, tw0 = tmpl.shape[:2]
+
+        for s in scales:
+
+            tw = int(tw0 * s)
+            th = int(th0 * s)
+
+            if tw < 8 or th < 8:
+                continue
+
+            if rh < th or rw < tw:
+                continue
+
+            tmpl_s = cv2.resize(
+                tmpl,
+                (tw,th),
+                interpolation=cv2.INTER_AREA if s < 1.0 else cv2.INTER_LINEAR
+            )
+
+            res = cv2.matchTemplate(roi_img, tmpl_s, cv2.TM_CCOEFF_NORMED)
+
+            _,score,_,loc = cv2.minMaxLoc(res)
+
+            if score > best_score:
+
+                best_score = float(score)
+                best_name = name
+                best_loc = loc
+                best_hw = (th,tw)
+                best_scale = s
+
+    return best_name,best_score,best_loc,best_hw,best_scale
+
 def match_any(roi_img: np.ndarray, templates: List[Tuple[str, np.ndarray]]):
     """
     Ritorna:
@@ -388,6 +444,17 @@ def tap_match_in_fullscreen(roi_coords, match_loc, tmpl_hw):
 
 def forziere_flow_tick():
     flow = forziere_flow_holder.get("flow")
+    if flow is None:
+        return
+
+    with SCREENSHOT_LOCK:
+        img = load_image(SCREENSHOT_PATH)
+
+    if img is not None:
+        flow.step(img)
+
+def research_flow_tick():
+    flow = research_flow_holder.get("flow")
     if flow is None:
         return
 
@@ -1135,17 +1202,41 @@ def ministry_flow_tick():
     if img is not None:
         flow.step(img)
 
-def is_science_icon_visible(img):
-    roi, coords = crop_roi(img, SCIENCE_ICON_ROI)
-    name, score, loc, hw = match_any(roi, SCIENCE_ICON_TEMPLATES)
-    log_event(f"[SCIENCE ICON] score={score:.3f}")
-    cv2.imwrite("debug/science_roi.png", roi)
-    return score >= SCIENCE_ICON_THRESHOLD
+def officer_icon_visible(img):
 
-def is_construction_icon_visible(img):
-    roi, coords = crop_roi(img, CONSTRUCTION_ICON_ROI)
-    name, score, loc, hw = match_any(roi, CONSTRUCTION_ICON_TEMPLATES)
-    return score >= CONSTRUCTION_ICON_THRESHOLD
+    roi_left,_ = crop_roi(img, LEFT_ICON_ROI)
+    roi_top,_ = crop_roi(img, TOP_ICON_ROI)
+
+    os.makedirs("debug",exist_ok=True)
+
+    cv2.imwrite("debug/officer_left.png",roi_left)
+    cv2.imwrite("debug/officer_top.png",roi_top)
+
+    # LEFT check
+    s_nameL,s_scoreL,_,_ = match_any(roi_left, SCIENCE_ICON_TEMPLATES)
+    c_nameL,c_scoreL,_,_ = match_any(roi_left, CONSTRUCTION_ICON_TEMPLATES)
+
+    # TOP check (multiscale)
+    s_nameT,s_scoreT,_,_,_ = match_any_multiscale(roi_top, SCIENCE_ICON_TEMPLATES)
+    c_nameT,c_scoreT,_,_,_ = match_any_multiscale(roi_top, CONSTRUCTION_ICON_TEMPLATES)
+
+    left_visible = (
+        s_scoreL >= SCIENCE_ICON_THRESHOLD or
+        c_scoreL >= CONSTRUCTION_ICON_THRESHOLD
+    )
+
+    top_visible = (
+        s_scoreT >= SCIENCE_ICON_THRESHOLD or
+        c_scoreT >= CONSTRUCTION_ICON_THRESHOLD
+    )
+
+    log_event(
+        f"[OFFICER ICON] "
+        f"LEFT sci={s_scoreL:.3f} con={c_scoreL:.3f} | "
+        f"TOP sci={s_scoreT:.3f} con={c_scoreT:.3f}"
+    )
+
+    return left_visible or top_visible
 
 # ============================================================
 # MAIN
@@ -1204,7 +1295,9 @@ def main():
         mflow = ministry_flow_holder.get("flow")
         fflow = forziere_flow_holder.get("flow")
         heal_flow = HealFlow(log_event)
-        
+        research_flow_holder["flow"] = ResearchFlow(log_event)
+        rflow = research_flow_holder.get("flow")
+
         #LOGICA SEQUENZIALE
         try:
             while not stop_evt.is_set():
@@ -1230,7 +1323,10 @@ def main():
                hq_upgrade_watcher_tick(stop_evt)
                
                # 5. Eventi semplici
-               if not WORKFLOW_MANAGER.is_active(Workflow.HEAL):
+               if (
+                   not WORKFLOW_MANAGER.is_active(Workflow.HEAL)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.RESEARCH)
+               ):
                    simple_event_watcher_tick(stop_evt)
 
                # 6. Donazioni
@@ -1246,15 +1342,21 @@ def main():
                # 7. Ministry
                if (mflow is not None and mflow.state.name == "IDLE" and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC) and WORKFLOW_MANAGER.can_run(Workflow.MINISTRY) and not WORKFLOW_MANAGER.is_active(Workflow.MINISTRY)):
                    if time.time() >= mflow.cooldown_until:
+                       # aspetta nuovo frame (evita screenshot donation)
+                       wait_new_frame(0.8)
+
                        img = load_image(SCREENSHOT_PATH)
                        if img is not None:
-                           science_visible = is_science_icon_visible(img)
-                           construction_visible = is_construction_icon_visible(img)
-                       
-                           if not science_visible and not construction_visible:
+                           if not WORKFLOW_MANAGER.is_active(Workflow.MINISTRY):
+                               officer_visible = officer_icon_visible(img)
+                           else:
+                               officer_visible = True
+
+                           if not officer_visible:
                                mflow.trigger()
                            else:
                                log_event("[MINISTRY] officer icon visibile → skip trigger")
+
                ministry_flow_tick()
 #               print("\n[!] Ministry flow Disabled!")
 
@@ -1267,6 +1369,18 @@ def main():
                ):
                    fflow.trigger()
                forziere_flow_tick()
+
+               # 9. Research
+               if (
+                   rflow is not None
+                   and rflow.state.name == "IDLE"
+                   and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.RESEARCH)
+                   and WORKFLOW_MANAGER.can_run(Workflow.RESEARCH)
+               ):
+                   rflow.trigger()
+               
+               research_flow_tick()
    
                # Dopo ogni ciclo, puoi dormire un attimo
                time.sleep(1)
