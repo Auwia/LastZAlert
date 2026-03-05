@@ -15,7 +15,7 @@ from bot_utils import load_image, crop_roi, load_templates, match_any, adb_tap
 # DEBUG
 # ============================================================
 
-DEBUG_DONATION = False
+DEBUG_DONATION = True
 DEBUG_DIR = "debug/donation"
 os.makedirs(DEBUG_DIR, exist_ok=True)
 
@@ -34,6 +34,7 @@ ROI_ALLIANCE_ICON = (0.85, 0.98, 0.75, 0.95)
 ROI_ALLIANCE_TECH = (0.0, 1.0, 0.0, 1.0)
 ROI_RECOMMENDED   = (0.0, 1.0, 0.0, 1.0)
 ROI_DONATE_BUTTON = (0.20, 0.80, 0.70, 0.90)
+ROI_TECH_BADGE = (0.40, 0.50, 0.585, 0.62)
 
 ROI_ATTEMPTS = (0.45, 0.85, 0.62, 0.75)
 ROI_COOLDOWN = (0.20, 0.95, 0.70, 0.92)
@@ -44,6 +45,22 @@ ACTION_COOLDOWN_SEC = 1.0
 # ============================================================
 # OCR
 # ============================================================
+
+def _ocr_badge_number(img) -> Optional[int]:
+    if img is None or img.size == 0:
+        return None
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    
+    # tieni solo il bianco del numero
+    mask = cv2.inRange(hsv, (0,0,200), (180,40,255))
+    
+    mask = cv2.resize(mask, None, fx=4, fy=4, interpolation=cv2.INTER_NEAREST)
+
+    txt = pytesseract.image_to_string(
+        mask, config="--psm 7 -c tessedit_char_whitelist=0123456789"
+    ).strip()
+    m = re.search(r"\d+", txt)
+    return int(m.group(0)) if m else None
 
 def _ocr_text(img):
     if img is None or img.size == 0:
@@ -191,6 +208,61 @@ class DonationFlow:
             roi, (ox, oy) = crop_roi(img, ROI_ALLIANCE_TECH)
             name, score, loc, hw = match_any(roi, self.templates["alliance_button"])
             if name and score >= THR:
+                # ---- badge attempts (pallino rosso) ----
+                # area relativa alla tile trovata: in alto a destra
+                roi_badge, _ = crop_roi(img, ROI_TECH_BADGE)
+                badge = roi_badge.copy()
+        
+                if DEBUG_DONATION:
+                    cv2.imwrite(f"{DEBUG_DIR}/badge.png", badge)
+        
+                attempts = _ocr_badge_number(badge)
+        
+                if DEBUG_DONATION:
+                    self.log(f"[DONATION-DEBUG] badge attempts OCR={attempts}")
+
+                # -------------------------------------------------
+                # badge NON presente (<10 tentativi)
+                # -------------------------------------------------
+                if attempts is None:
+                    wait_seconds = 17 * 60 * 10
+                    self.next_allowed = time.time() + wait_seconds
+                
+                    self.log("[DONATION-FLOW] no badge detected (<10 attempts) → next check in 170 min")
+                
+                    cleanup_coords = [(100, 2400)]
+                    for (x, y) in cleanup_coords:
+                        time.sleep(0.4)
+                        adb_tap(x, y)
+                
+                    self.state = DonationState.IDLE
+                    WORKFLOW_MANAGER.release(Workflow.DONATION)
+                    self._mark_action()
+                    return
+        
+                # se non legge nulla, NON rompere tutto: fallback "entra comunque"
+                # (poi eventualmente stringiamo il crop)
+                if attempts is not None and attempts < 20:
+                    missing = 20 - attempts
+                    if attempts == 19:
+                        wait_seconds = 60
+                    else:
+                        wait_seconds = missing * 17 * 60
+                    self.next_allowed = time.time() + wait_seconds
+                    self.log(f"[DONATION-FLOW] badge attempts={attempts}/20 → next check in {wait_seconds//60} min")
+        
+                    # chiudi UI (stessa tua logica)
+                    cleanup_coords = [(100, 2400)]
+                    for (x, y) in cleanup_coords:
+                        time.sleep(0.4)
+                        adb_tap(x, y)
+        
+                    self.state = DonationState.IDLE
+                    WORKFLOW_MANAGER.release(Workflow.DONATION)
+                    self._mark_action()
+                    return
+        
+                # se attempts==20 (o attempts None) allora prosegui col tap come prima
                 adb_tap(
                     ox + loc[0] + hw[1] // 2,
                     oy + loc[1] + hw[0] // 2

@@ -2,13 +2,14 @@ import threading
 from enum import IntEnum
 
 class Workflow(IntEnum):
-    TREASURE = 6
-    HQ       = 5
-    HEAL     = 4
-    DONATION = 3
-    MINISTRY = 2
-    FORZIERE = 1
-    GENERIC  = 0
+    TREASURE = 7
+    HQ       = 6
+    HEAL     = 5
+    DONATION = 4
+    MINISTRY = 3
+    FORZIERE = 2
+    GENERIC  = 1
+    RESEARCH = 0
 
 class WorkflowManager:
     def __init__(self):
