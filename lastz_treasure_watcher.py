@@ -27,6 +27,19 @@ ADB_CMD = "adb"
 PACKAGE_NAME = "com.readygo.barrel.gp"
 
 USE_SEQUENTIAL = True
+ENABLE_MULTI_RESOURCE_COLLECTION = True
+
+RESOURCE_EVENTS = {
+    "wood",
+    "meal",
+    "electricity",
+    "alloy",
+    "zelt",
+    "experience"
+}
+
+MULTI_RESOURCE_BLOCK_SECONDS = 5
+_last_multi_resource_time = 0
 
 donation_flow_holder = {"flow": None}
 ministry_flow_holder = {"flow": None}
@@ -98,7 +111,7 @@ REC_LOCK = threading.Lock()
 TREASURE_FLOW_EVENT = threading.Event()
 
 SCIENCE_ICON_DIR = "ministry/science_icon"
-SCIENCE_ICON_ROI = (0.0, 0.50, 0.0, 0.35)
+SCIENCE_ICON_ROI = (0.0, 0.18, 0.0, 0.55)
 SCIENCE_ICON_THRESHOLD = 0.80
 
 CONSTRUCTION_ICON_DIR = "ministry/construction_icon"
@@ -1046,7 +1059,10 @@ def simple_event_watcher_tick(stop_evt):
 
     did_anything = False
 
+    global _last_multi_resource_time
+    
     for name, templates in _simple_event_templates.items():
+
         cfg = SIMPLE_EVENTS[name]
         if now - _last_fire_simple_event[name] < cfg["cooldown"]:
             continue
@@ -1058,6 +1074,18 @@ def simple_event_watcher_tick(stop_evt):
             log_event(f"[{name.upper()}] best={name_t} score={score:.3f} thr={cfg['threshold']:.2f}")
 
         if score >= cfg["threshold"]:
+        
+            now = time.time()
+        
+            # VIP6 multi resource logic
+            if ENABLE_MULTI_RESOURCE_COLLECTION and name in RESOURCE_EVENTS:
+        
+                # se abbiamo appena raccolto, skip
+                if now - _last_multi_resource_time < MULTI_RESOURCE_BLOCK_SECONDS:
+                    continue
+        
+                _last_multi_resource_time = now
+
             if cfg.get("tap") == "OUTSIDE":
                 cx, cy = tap_outside_popup(img) 
             elif cfg.get("tap") == "center":
@@ -1110,6 +1138,8 @@ def ministry_flow_tick():
 def is_science_icon_visible(img):
     roi, coords = crop_roi(img, SCIENCE_ICON_ROI)
     name, score, loc, hw = match_any(roi, SCIENCE_ICON_TEMPLATES)
+    log_event(f"[SCIENCE ICON] score={score:.3f}")
+    cv2.imwrite("debug/science_roi.png", roi)
     return score >= SCIENCE_ICON_THRESHOLD
 
 def is_construction_icon_visible(img):
