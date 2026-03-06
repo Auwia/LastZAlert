@@ -39,9 +39,9 @@ class ResearchState(Enum):
     TAP_RAPID = 3
     SCAN_NODE = 4
     START_RESEARCH = 5
-    HELP = 6
-    EXIT = 7
-
+    REPLENISH = 6
+    HELP = 7
+    EXIT = 8
 
 # ============================================================
 # FLOW
@@ -64,6 +64,7 @@ class ResearchFlow:
             "rapid": load_templates("research/rapid_grow.png"),
             "research": load_templates("research/research_button.png"),
             "help": load_templates("research/help_button.png"),
+            "replenish": load_templates("research/replenish.png"),
         }
 
         self.log("[RESEARCH-FLOW] initialized")
@@ -190,10 +191,11 @@ class ResearchFlow:
             if name and score >= THR:
 
                 adb_tap(loc[0] + hw[1]//2, loc[1] + hw[0]//2)
-
                 self.log("[RESEARCH] research started")
 
-                self.state = ResearchState.HELP
+                time.sleep(2)
+
+                self.state = ResearchState.REPLENISH
                 self._mark()
                 return
 
@@ -203,6 +205,22 @@ class ResearchFlow:
             return
 
         # -----------------------------------------------------
+
+        if self.state == ResearchState.REPLENISH:
+        
+            name_r, score_r, loc_r, hw_r = match_any(img, self.templates["replenish"])
+        
+            if name_r and score_r >= THR:
+                adb_tap(loc_r[0] + hw_r[1]//2, loc_r[1] + hw_r[0]//2)
+                self.log("[RESEARCH] replenish all tapped")
+                time.sleep(1)
+        
+            self.state = ResearchState.HELP
+            self._mark()
+            return
+
+        # -----------------------------------------------------
+
 
         if self.state == ResearchState.HELP:
 

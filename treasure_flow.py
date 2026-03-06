@@ -19,6 +19,7 @@ import numpy as np
 # ============================================================
 # CONFIG (puoi modificarle da fuori se vuoi)
 # ============================================================
+DEBUG = False
 
 ENABLE_TREASURE_FLOW = True
 
@@ -54,6 +55,7 @@ SPAM_TICK_SLEEP = 0.02          # sleep fra tap durante lo spam
 
 # Se non leggiamo più il timer per N tick, consideriamo "finito"
 TIMER_MISSING_TICKS_TO_FINISH = 12  # 12 * 0.25 = ~3 sec
+FLOW_MAX_RUNTIME_SEC = 15 * 60   # 15 minuti
 
 # ============================================================
 # ROI (fractions x1,x2,y1,y2) - tarale con i tuoi screenshot
@@ -74,7 +76,7 @@ ROI_MARCH = (0.0, 1.0, 0.0, 1.0) #backup: (0.20, 0.80, 0.55, 0.90)
 
 # Timer sopra (come nel tuo screenshot con lente e timer vicino/ sopra)
 # Metti qui la fascia dove compare tipo "01:59:54" ecc
-ROI_TIMER_TEXT = (0.0, 1.0, 0.0, 1.0) #backup: (0.32, 0.68, 0.40, 0.70)
+ROI_TIMER_TEXT = (0.33, 0.67, 0.39, 0.49)
 
 # Zona “tra elicottero e timer” dove vuoi spammare tap (random) quando <= 5 sec
 ROI_SPAM_TAP = (0.35, 0.65, 0.35, 0.70)
@@ -258,9 +260,10 @@ class FlowState(Enum):
     IN_MAP_FIND_HELI = 3
     IN_HELI_FIND_MAGNIFIER = 4
     IN_TEAM_FIND_MARCH = 5
-    DIGGING_WAIT_TIMER = 6
-    DIGGING_SPAM = 7
-    RETURN_HQ = 8
+    AFTER_MARCH_TAP_HELI = 6
+    DIGGING_WAIT_TIMER = 7
+    DIGGING_SPAM = 8
+    RETURN_HQ = 9
 
 class TreasureFlow:
     """
@@ -276,6 +279,7 @@ class TreasureFlow:
         self.last_action_ts = 0.0
         self.timer_missing_ticks = 0
         self.state_enter_ts = time.time()
+        self.flow_start_ts = None
 
         self.t_chat = load_templates_from_dir(CHAT_LINK_DIR)
         self.t_heli = load_templates_from_dir(HELI_DIR)
@@ -292,13 +296,18 @@ class TreasureFlow:
         roi, _ = crop_roi(img, ROI_TIMER_TEXT)
         # preprocessing per OCR: grayscale + threshold
         g = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        g = cv2.resize(g, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
-        _, th = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        g = cv2.resize(g, None, fx=3.0, fy=3.0, interpolation=cv2.INTER_CUBIC)
+        g = cv2.GaussianBlur(g,(3,3),0)
+        _, th = cv2.threshold(g, 150, 255, cv2.THRESH_BINARY)
         # whitelist per ridurre rumore
         config = "--psm 7 -c tessedit_char_whitelist=0123456789:"
         txt = pytesseract.image_to_string(th, config=config)  # type: ignore
         self.log(f"[TREASURE-FLOW] OCR raw='{txt}'")
         sec = parse_timer_text_to_seconds(txt)
+
+        cv2.imwrite("debug/treasure/timer_roi.png", roi)
+        cv2.imwrite("debug/treasure/timer_thresh.png", th)
+
         return sec
 
     def trigger(self):
@@ -308,6 +317,7 @@ class TreasureFlow:
         if not WORKFLOW_MANAGER.acquire(Workflow.TREASURE):
             return
     
+        self.flow_start_ts = time.time() 
         self.state = FlowState.GO_CHAT
         self.timer_missing_ticks = 0
         self.log("[TREASURE-FLOW] trigger -> GO_CHAT")
@@ -323,6 +333,25 @@ class TreasureFlow:
             return
         if self.state == FlowState.IDLE:
             return
+
+        # --------------------------------------------------
+        # GLOBAL WATCHDOG
+        # --------------------------------------------------
+    
+        if self.flow_start_ts:
+            elapsed = time.time() - self.flow_start_ts
+            if elapsed > FLOW_MAX_RUNTIME_SEC:
+                self.log("[TREASURE-FLOW] WATCHDOG TIMEOUT -> abort flow")
+    
+                if self.stop_record_fn:
+                    self.stop_record_fn()
+    
+                self.state = FlowState.IDLE
+                WORKFLOW_MANAGER.release(Workflow.TREASURE)
+                self.log("[WF] TREASURE rilasciato (watchdog)")
+    
+                self.flow_start_ts = None
+                return
 
         # sicurezza anti-ripetizione
         if not self._cooldown_ok() and self.state not in (FlowState.DIGGING_SPAM,):
@@ -352,11 +381,6 @@ class TreasureFlow:
             debug_dir = "debug/chat_ui"
             os.makedirs(debug_dir, exist_ok=True)
         
-            fname = f"{debug_dir}/chat_ui_{name_ui}_{score_ui:.3f}_{ts}.png"
-            cv2.imwrite(fname, roi_chat_ui)
- 
-            self.log(f"[DEBUG][CHAT_UI] match={name_ui} score={score_ui:.3f} dump={fname}")
-            
             if not (name_ui and score_ui >= 0.6):
                 # non siamo più in chat → il link ha funzionato
                 self.log("[TREASURE-FLOW] chat non più visibile → passiamo alla MAP")
@@ -380,20 +404,9 @@ class TreasureFlow:
                 self.log(f"[DEBUG] Nessun match nella ROI della chat (link non trovato)")
 
             if name and score >= THR_CHAT_LINK:
-                if score < 0.6:
-                    self.log(
-                        f"[TREASURE-FLOW] chat link debole (score={score:.3f}), attendo nuovo frame"
-                    )
-                    return
-
                 xs, ys, _, _ = coords
-
-                #cx = xs + loc[0] + int(hw[1] * 0.88)  # 88% della larghezza = zona "State"
-                #cy = ys + loc[1] + hw[0] // 2         # centro verticale
-
                 cx, cy = tap_match_in_fullscreen(coords, loc, hw)
                 adb_tap(cx, cy)
-
                 self._mark_action()
                 self.log(f"[TREASURE-FLOW] chat link tap @ {cx},{cy} score={score:.3f} thr={THR_CHAT_LINK}")
                 time.sleep(1.0)
@@ -401,7 +414,7 @@ class TreasureFlow:
             else:
                     self.log(f"[TREASURE-FLOW] link non ancora valido: score={score:.3f} < thr={THR_CHAT_LINK}")
 
-            cv2.imwrite("debug/debug_roi_chat_link.png", roi)
+            cv2.imwrite("debug/treasure/debug_roi_chat_link.png", roi)
 
             return
 
@@ -456,8 +469,29 @@ class TreasureFlow:
                 cx, cy = tap_match_in_fullscreen(coords, loc, hw) 
                 self._mark_action()
                 self.log(f"[TREASURE-FLOW] MARCH tap @ {cx},{cy} score={score:.3f} thr={THR_MARCH}")
-                self.state = FlowState.DIGGING_WAIT_TIMER
+                self.state = FlowState.AFTER_MARCH_TAP_HELI
                 self.timer_missing_ticks = 0
+            return
+
+        # -------------------------
+        # AFTER_MARCH_TAP_HELI
+        # -------------------------
+        if self.state == FlowState.AFTER_MARCH_TAP_HELI:
+        
+            roi, coords = crop_roi(img, ROI_HELI)
+            name, score, loc, hw = match_any(roi, self.t_heli)
+        
+            if name and score >= THR_HELI:
+                cx, cy = tap_match_in_fullscreen(coords, loc, hw)
+        
+                self.log(f"[TREASURE-FLOW] second heli tap @ {cx},{cy}")
+        
+                self._mark_action()
+        
+                time.sleep(1.2)
+        
+                self.state = FlowState.DIGGING_WAIT_TIMER
+        
             return
 
         # -------------------------
@@ -520,6 +554,7 @@ class TreasureFlow:
             self.state = FlowState.IDLE
             WORKFLOW_MANAGER.release(Workflow.TREASURE)
             self.log("[WF] TREASURE rilasciato")
+            self.flow_start_ts = None
             return
 
 

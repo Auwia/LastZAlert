@@ -896,7 +896,6 @@ def treasure_watcher_loop(stop_evt):
     hits = 0
 
     while not stop_evt.is_set():
-        #print("[DEBUG] treasure_watcher_loop attivo")
         with SCREENSHOT_LOCK:
             img = load_image(SCREENSHOT_PATH)
 
@@ -1154,10 +1153,18 @@ def simple_event_watcher_tick(stop_evt):
                 _last_multi_resource_time = now
 
             if cfg.get("tap") == "OUTSIDE":
-                cx, cy = tap_outside_popup(img) 
+                cx, cy = tap_outside_popup(img)
+            
             elif cfg.get("tap") == "center":
-                cx, cy = (img.shape[1] // 2, img.shape[0] // 2)
+                cx = img.shape[1] // 2
+                cy = img.shape[0] // 2
                 adb_tap(cx, cy)
+            
+            elif cfg.get("tap") == "bottom_right":
+                cx = int(img.shape[1] * 0.97)
+                cy = int(img.shape[0] * 0.97)
+                adb_tap(cx, cy)
+            
             else:
                 cx, cy = tap_match_in_fullscreen(roi_coords, loc, hw)
         
@@ -1228,12 +1235,6 @@ def officer_icon_visible(img):
     top_visible = (
         s_scoreT >= SCIENCE_ICON_THRESHOLD or
         c_scoreT >= CONSTRUCTION_ICON_THRESHOLD
-    )
-
-    log_event(
-        f"[OFFICER ICON] "
-        f"LEFT sci={s_scoreL:.3f} con={c_scoreL:.3f} | "
-        f"TOP sci={s_scoreT:.3f} con={c_scoreT:.3f}"
     )
 
     return left_visible or top_visible
@@ -1355,7 +1356,8 @@ def main():
                            if not officer_visible:
                                mflow.trigger()
                            else:
-                               log_event("[MINISTRY] officer icon visibile → skip trigger")
+                               if not DEBUG_EVENTS_ONLY:
+                                   log_event("[MINISTRY] officer icon visibile → skip trigger")
 
                ministry_flow_tick()
 #               print("\n[!] Ministry flow Disabled!")
