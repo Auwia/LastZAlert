@@ -119,7 +119,7 @@ CONSTRUCTION_ICON_DIR = "ministry/construction_icon"
 CONSTRUCTION_ICON_THRESHOLD = 0.80
 
 LEFT_ICON_ROI = (0.00, 0.16, 0.33, 0.82)
-TOP_ICON_ROI = (0.25, 0.75, 0.00, 0.12)
+TOP_ICON_ROI = (0.14, 0.55, 0.07, 0.12)
 
 # ============================================================
 # ROI (FRAZIONI dello schermo: x1,x2,y1,y2)
