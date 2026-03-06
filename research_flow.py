@@ -103,7 +103,6 @@ class ResearchFlow:
             return
 
         if (time.time() - self.last_progress_ts) > STALL_TIMEOUT:
-            self.log("[RESEARCH] STALL -> reset")
             self.state = ResearchState.IDLE
             WORKFLOW_MANAGER.release(Workflow.RESEARCH)
             return
