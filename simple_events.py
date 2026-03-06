@@ -21,14 +21,14 @@ SIMPLE_EVENTS = {
         "threshold": 0.88,
         "cooldown": 1,
     },
-#    "back_home": {
-#        "templates": "back_home",
-#        "roi": (0.0, 1.00, 0.0, 1.0),
-#        "threshold": 0.9,
-#        "cooldown": 10,
-#        "tap": "center",
-#        "log": "[BACK_AT_HOME]",
-#    },
+    "back_home": {
+        "templates": "back_home",
+        "roi": (0.0, 1.00, 0.0, 1.0),
+        "threshold": 0.9,
+        "cooldown": 10,
+        "tap": "bottom_right",
+        "log": "[BACK_AT_HOME]",
+    },
     "confirm_popup": {
         "templates": "confirm_popup",
         "roi": (0.0, 1.0, 0.0, 1.0),
