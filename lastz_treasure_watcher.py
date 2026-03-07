@@ -39,7 +39,7 @@ RESOURCE_EVENTS = {
     "experience"
 }
 
-MULTI_RESOURCE_BLOCK_SECONDS = 5
+MULTI_RESOURCE_BLOCK_SECONDS = 1
 _last_multi_resource_time = 0
 
 donation_flow_holder = {"flow": None}
@@ -1172,12 +1172,12 @@ def simple_event_watcher_tick(stop_evt):
             _last_fire_simple_event[name] = now
             _last_generic_fire = now
             did_anything = True
-            time.sleep(1.0)
+            time.sleep(0.2)
 
     WORKFLOW_MANAGER.release(Workflow.GENERIC)
 
     if did_anything:
-        time.sleep(1)
+        time.sleep(0.3)
 
 # 3b. TREASURE FLOW (chat explorer)
 def treasure_flow_watcher_tick():
@@ -1385,7 +1385,7 @@ def main():
                research_flow_tick()
    
                # Dopo ogni ciclo, puoi dormire un attimo
-               time.sleep(1)
+               time.sleep(0.1)
     
         except KeyboardInterrupt:
             print("\n[!] Stop richiesto.")
