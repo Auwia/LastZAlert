@@ -61,6 +61,7 @@ class ForziereFlow:
         self.claim_wait_start = 0.0
 
         self.templates = {
+            "exploration": load_templates("exploration"),
             "forziere_full": load_templates("forziere"),
             "collect": load_templates("collect_button"),
             "claim": load_templates("claim_button"),      # pulsante CLAIM

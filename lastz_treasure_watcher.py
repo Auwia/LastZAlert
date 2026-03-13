@@ -132,7 +132,8 @@ TREASURE_ROI = (0.50, 0.82, 0.84, 0.97)
 
 
 # Heal icon: nuvoletta croce rossa di solito sopra ospedale (zona centrale)
-HEAL_ICON_ROI = (0.0, 1.0, 0.0, 1.0)
+#HEAL_ICON_ROI = (0.0, 1.0, 0.0, 1.0)
+HEAL_ICON_ROI = (0.697, 0.937, 0.581, 0.693)
 
 # Dentro ospedale: prima riga campo numero (label su cui tappare per aprire tastiera)
 # Metti qui la zona della label numerica della PRIMA RIGA (Shock Cavalry)
@@ -153,7 +154,7 @@ DONATE_BUTTON_ROI  = (0.20, 0.80, 0.70, 0.90)
 DEBUG_SAVE_SCREENSHOTS = False   # salva screen interi
 DEBUG_SAVE_ROIS        = False    # salva le ROI ritagliate
 DEBUG_EVENTS_ONLY      = True  # scrive solo quando riconosce un evento
-
+DEBUG                  = False
 
 # ============================================================
 # UTIL
@@ -248,6 +249,16 @@ def screenshot_producer(stop_evt: threading.Event):
     tmp_path = SCREENSHOT_PATH + ".tmp"
 
     while not stop_evt.is_set():
+        if DEBUG:
+            log_event(
+                f"[LOOP] "
+                f"heal={WORKFLOW_MANAGER.is_active(Workflow.HEAL)} "
+                f"research={WORKFLOW_MANAGER.is_active(Workflow.RESEARCH)} "
+                f"generic={WORKFLOW_MANAGER.is_active(Workflow.GENERIC)} "
+                f"donation={WORKFLOW_MANAGER.is_active(Workflow.DONATION)} "
+                f"ministry={WORKFLOW_MANAGER.is_active(Workflow.MINISTRY)}"
+            )
+
         #print("[SEQUENTIAL] Tick loop in esecuzione...")
         try:
             with SCREENSHOT_LOCK:
@@ -1102,6 +1113,9 @@ _last_generic_fire = 0.0
 def simple_event_watcher_tick(stop_evt):
     global _simple_event_templates, _last_fire_simple_event, _last_generic_fire
 
+    if DEBUG:
+        log_event("[SIMPLE EVENTS] tick start")
+
     if not _simple_event_templates:
         for name, cfg in SIMPLE_EVENTS.items():
             templates = load_templates_from_dir(cfg["templates"])
@@ -1110,10 +1124,16 @@ def simple_event_watcher_tick(stop_evt):
         _last_fire_simple_event = {name: 0.0 for name in _simple_event_templates}
 
     now = time.time()
-    if now - _last_generic_fire < 10:
+    if now - _last_generic_fire < 1:
         return
 
+    if DEBUG:
+        log_event("[SIMPLE EVENTS] try acquire GENERIC")
+
     if not WORKFLOW_MANAGER.acquire(Workflow.GENERIC):
+        time.sleep(0.05)
+        if DEBUG:
+            log_event("[SIMPLE EVENTS] GENERIC busy")
         return
 
     with SCREENSHOT_LOCK:
@@ -1140,12 +1160,11 @@ def simple_event_watcher_tick(stop_evt):
             log_event(f"[{name.upper()}] best={name_t} score={score:.3f} thr={cfg['threshold']:.2f}")
 
         if score >= cfg["threshold"]:
-        
+            if DEBUG:
+                log_event(f"[EVENT DETECTED] {name}")
             now = time.time()
-        
             # VIP6 multi resource logic
             if ENABLE_MULTI_RESOURCE_COLLECTION and name in RESOURCE_EVENTS:
-        
                 # se abbiamo appena raccolto, skip
                 if now - _last_multi_resource_time < MULTI_RESOURCE_BLOCK_SECONDS:
                     continue
@@ -1322,19 +1341,27 @@ def main():
                 
                # 4. HQ gifts
                hq_upgrade_watcher_tick(stop_evt)
+
+               if DEBUG:
+                   log_event(
+                       f"[CHECK SIMPLE EVENTS] "
+                       f"heal={WORKFLOW_MANAGER.is_active(Workflow.HEAL)} "
+                       f"research={WORKFLOW_MANAGER.is_active(Workflow.RESEARCH)}"
+                   )
                
                # 5. Eventi semplici
                if (
                    not WORKFLOW_MANAGER.is_active(Workflow.HEAL)
                    and not WORKFLOW_MANAGER.is_active(Workflow.RESEARCH)
                ):
+                   if DEBUG:
+                       log_event("[SIMPLE EVENTS] running")
                    simple_event_watcher_tick(stop_evt)
 
                # 6. Donazioni
                if (
                    dflow is not None
                    and dflow.state.name == "IDLE"
-                   and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
                    and WORKFLOW_MANAGER.can_run(Workflow.DONATION)
                ):
                    dflow.trigger()
@@ -1373,16 +1400,16 @@ def main():
                forziere_flow_tick()
 
                # 9. Research
-               if (
-                   rflow is not None
-                   and rflow.state.name == "IDLE"
-                   and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
-                   and not WORKFLOW_MANAGER.is_active(Workflow.RESEARCH)
-                   and WORKFLOW_MANAGER.can_run(Workflow.RESEARCH)
-               ):
-                   rflow.trigger()
-               
-               research_flow_tick()
+#               if (
+#                   rflow is not None
+#                   and rflow.state.name == "IDLE"
+#                   and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
+#                   and not WORKFLOW_MANAGER.is_active(Workflow.RESEARCH)
+#                   and WORKFLOW_MANAGER.can_run(Workflow.RESEARCH)
+#               ):
+#                   rflow.trigger()
+#               
+#               research_flow_tick()
    
                # Dopo ogni ciclo, puoi dormire un attimo
                time.sleep(0.1)

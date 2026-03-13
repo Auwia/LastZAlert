@@ -36,6 +36,7 @@ class WorkflowManager:
             return self.active is None or self.active == wf
 
     def acquire(self, wf: Workflow) -> bool:
+        #print(f"[WF] acquire request {Workflow}")
         with self._lock:
             if self.active is None or self.active <= wf:
                 self.active = wf
@@ -45,6 +46,7 @@ class WorkflowManager:
                 return False
 
     def release(self, wf: Workflow):
+        #print(f"[WF] release {Workflow}")
         with self._lock:
             if self.active == wf:
                 self.active = None

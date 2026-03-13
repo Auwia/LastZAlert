@@ -11,7 +11,7 @@ from bot_utils import load_templates, match_any, adb_tap
 # CONFIG
 # ============================================================
 
-DEBUG = False
+DEBUG = True
 THR = 0.75
 ACTION_COOLDOWN = 1.0
 STALL_TIMEOUT = 40
@@ -56,6 +56,8 @@ class ResearchFlow:
         self.last_action_ts = 0
         self.last_progress_ts = 0
 
+        self.lab_opened = False
+
         self.node_index = 0
 
         self.templates = {
@@ -70,6 +72,21 @@ class ResearchFlow:
         self.log("[RESEARCH-FLOW] initialized")
 
     # ---------------------------------------------------------
+
+    def _do_exit(self):
+    
+        if self.lab_opened:
+            adb_tap(*BACK)
+            time.sleep(0.5)
+            adb_tap(*BACK)
+    
+        self.lab_opened = False
+    
+        self.log("[RESEARCH] exit")
+    
+        self.state = ResearchState.IDLE
+        WORKFLOW_MANAGER.release(Workflow.RESEARCH)
+        self._mark()
 
     def _cooldown_ok(self):
         return (time.time() - self.last_action_ts) >= ACTION_COOLDOWN
@@ -96,6 +113,8 @@ class ResearchFlow:
     # ---------------------------------------------------------
 
     def step(self, img):
+        if DEBUG:
+            self.log(f"[RESEARCH] step state={self.state}")
 
         if self.state == ResearchState.IDLE:
             return
@@ -120,6 +139,7 @@ class ResearchFlow:
         
             if name and score >= THR:
                 adb_tap(loc[0] + hw[1]//2, loc[1] + hw[0]//2)
+                self.lab_opened = True
                 self.log("[RESEARCH] start tapped")
                 time.sleep(1)
         
@@ -142,6 +162,10 @@ class ResearchFlow:
                 self.log("[RESEARCH] lab tapped")
                 time.sleep(2)
                 self.state = ResearchState.TAP_RAPID
+                self._mark()
+            else:
+                self.log("[RESEARCH] lab not found -> exit")
+                self._do_exit()
                 self._mark()
             return
 
@@ -237,10 +261,13 @@ class ResearchFlow:
 
         if self.state == ResearchState.EXIT:
 
-            adb_tap(*BACK)
-            time.sleep(0.5)
-            adb_tap(*BACK)
+            if self.lab_opened:
+                adb_tap(*BACK)
+                time.sleep(0.5)
+                adb_tap(*BACK)
 
+            self.lab_opened = False
+    
             self.log("[RESEARCH] exit")
 
             self.state = ResearchState.IDLE
