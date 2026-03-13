@@ -93,6 +93,7 @@ class HealFlow:
         self.last_action_ts = 0.0
         self.last_progress_ts = 0.0
         self.batch_set = False
+        self.heal_icon_xy = None
 
         self.templates = {
             "hospital": load_templates("hospital"),
@@ -150,6 +151,7 @@ class HealFlow:
             if name and score >= 0.80:
                 cx = loc[0] + hw[1] // 2
                 cy = loc[1] + hw[0] // 2
+                self.heal_icon_xy = (cx, cy) 
                 adb_tap(cx, cy)
                 if DEBUG:
                     self.log(f"[HEAL-FLOW] heal icon tap @ {cx},{cy} score={score:.3f}")
@@ -198,8 +200,14 @@ class HealFlow:
             adb_keyevent(66)  # ENTER
             time.sleep(0.5)
             adb_tap(900, 2120)
-        
+
             self.log(f"[HEAL-FLOW] batch set (ROI) = {HEAL_BATCH}")
+            if self.heal_icon_xy:
+                time.sleep(0.4)
+                adb_tap(*self.heal_icon_xy)
+                if DEBUG:
+                    self.log(f"[HEAL-FLOW] back tap @ {self.heal_icon_xy}")
+
             self.state = HealState.IDLE
             self.batch_set = False
             WORKFLOW_MANAGER.release(Workflow.HEAL)

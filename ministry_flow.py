@@ -274,9 +274,9 @@ class MinistryFlow:
             self.log("[MINISTRY] precheck: already officer")
             return True
     
-        if self._application_note_visible(img):
-            self.log("[MINISTRY] precheck: application note visible")
-            return True
+        #if self._application_note_visible(img):
+        #    self.log("[MINISTRY] precheck: application note visible")
+        #    return True
     
         if self._already_applied(img):
             self.log("[MINISTRY] precheck: already applied (green row)")

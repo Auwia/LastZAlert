@@ -273,6 +273,7 @@ class TreasureFlow:
       flow.step(img)  # chiamata ad ogni tick con lo screenshot corrente
     """
     def __init__(self, log_fn=print, stop_record_fn=None):
+        os.makedirs("debug/treasure", exist_ok=True)
         self.log = log_fn
         self.stop_record_fn = stop_record_fn
         self.state = FlowState.IDLE
