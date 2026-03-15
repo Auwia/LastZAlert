@@ -19,9 +19,7 @@ import numpy as np
 # ============================================================
 # CONFIG (puoi modificarle da fuori se vuoi)
 # ============================================================
-DEBUG = False
-
-ENABLE_TREASURE_FLOW = True
+DEBUG = True
 
 ADB_CMD = "adb"
 
@@ -311,13 +309,15 @@ class TreasureFlow:
 
         return sec
 
-    def trigger(self):
-        if not ENABLE_TREASURE_FLOW:
-            return
+    def trigger(self, coords=None, loc=None, hw=None):
     
         if not WORKFLOW_MANAGER.acquire(Workflow.TREASURE):
             return
     
+        self.start_coords = coords
+        self.start_loc = loc
+        self.start_hw = hw
+
         self.flow_start_ts = time.time() 
         self.state = FlowState.GO_CHAT
         self.timer_missing_ticks = 0
@@ -330,8 +330,6 @@ class TreasureFlow:
         self.last_action_ts = time.time()
 
     def step(self, img):
-        if not ENABLE_TREASURE_FLOW:
-            return
         if self.state == FlowState.IDLE:
             return
 
@@ -364,6 +362,21 @@ class TreasureFlow:
         # Per ora consideriamo che dopo trigger tu sia già finito in chat o stai per finirci.
         # -------------------------
         if self.state == FlowState.GO_CHAT:
+            if self.start_coords is None:
+                self.log("[TREASURE-FLOW] missing coords")
+                self.state = FlowState.IDLE
+                return
+
+            cx, cy = tap_match_in_fullscreen(
+                self.start_coords,
+                self.start_loc,
+                self.start_hw
+            )
+        
+            self.log(f"[TREASURE-FLOW] tap treasure @ {cx},{cy}")
+        
+            time.sleep(1.2)
+
             # Piccolo delay e passa a cercare il link in chat
             self.state = FlowState.IN_CHAT_FIND_LINK
             self._mark_action()
@@ -407,7 +420,6 @@ class TreasureFlow:
             if name and score >= THR_CHAT_LINK:
                 xs, ys, _, _ = coords
                 cx, cy = tap_match_in_fullscreen(coords, loc, hw)
-                adb_tap(cx, cy)
                 self._mark_action()
                 self.log(f"[TREASURE-FLOW] chat link tap @ {cx},{cy} score={score:.3f} thr={THR_CHAT_LINK}")
                 time.sleep(1.0)
@@ -579,10 +591,6 @@ def treasure_flow_watcher(stop_evt: threading.Event,
     treasure_flow_watcher.flow = flow  # type: ignore
 
     while not stop_evt.is_set():
-        if not ENABLE_TREASURE_FLOW:
-            time.sleep(0.5)
-            continue
-
         if screenshot_lock:
             with screenshot_lock:
                 img = load_image(screenshot_path)

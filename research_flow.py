@@ -11,7 +11,7 @@ from bot_utils import load_templates, match_any, adb_tap
 # CONFIG
 # ============================================================
 
-DEBUG = True
+DEBUG = False
 THR = 0.75
 ACTION_COOLDOWN = 1.0
 STALL_TIMEOUT = 40
@@ -82,7 +82,8 @@ class ResearchFlow:
     
         self.lab_opened = False
     
-        self.log("[RESEARCH] exit")
+        if DEBUG:
+            self.log("[RESEARCH] exit")
     
         self.state = ResearchState.IDLE
         WORKFLOW_MANAGER.release(Workflow.RESEARCH)
@@ -164,7 +165,8 @@ class ResearchFlow:
                 self.state = ResearchState.TAP_RAPID
                 self._mark()
             else:
-                self.log("[RESEARCH] lab not found -> exit")
+                if DEBUG:
+                    self.log("[RESEARCH] lab not found -> exit")
                 self._do_exit()
                 self._mark()
             return
