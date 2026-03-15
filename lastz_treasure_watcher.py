@@ -15,6 +15,7 @@ from ministry_flow import MinistryFlow
 from forziere_flow import ForziereFlow
 from heal_flow import HealFlow
 from research_flow import ResearchFlow
+from rally_flow import RallyFlow, RALLY_TRIGGER_ROI
 
 import cv2
 import numpy as np
@@ -29,6 +30,12 @@ PACKAGE_NAME = "com.readygo.barrel.gp"
 
 USE_SEQUENTIAL = True
 ENABLE_MULTI_RESOURCE_COLLECTION = True
+ENABLE_TREASURE_FLOW = False
+
+ENABLE_RALLY_FLOW = True
+RALLY_DEBUG = True
+DEBUG_RALLY_DIR = "debug/rally"
+os.makedirs(DEBUG_RALLY_DIR, exist_ok=True)
 
 RESOURCE_EVENTS = {
     "wood",
@@ -46,6 +53,7 @@ donation_flow_holder = {"flow": None}
 ministry_flow_holder = {"flow": None}
 forziere_flow_holder = {"flow": None}
 research_flow_holder = {"flow": None}
+rally_flow_holder = {"flow": None}
 
 # Discord webhook (ATTENZIONE: se pubblico, meglio metterlo in env var)
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1446565181265154190/pL-0gcgP09RlQqnqHqQDIdQqm505tqa744is2R_1eGA3Had4OXmhPgQrTLYXYzaMld0S"
@@ -453,6 +461,25 @@ def tap_match_in_fullscreen(roi_coords, match_loc, tmpl_hw):
     adb_tap(cx, cy)
     return cx, cy
 
+def rally_flow_tick():
+    flow = rally_flow_holder.get("flow")
+    if flow is None:
+        return
+    with SCREENSHOT_LOCK:
+        img = load_image(SCREENSHOT_PATH)
+    if img is not None:
+        flow.step(img)
+    if img is None:
+        return
+    
+    # DEBUG ROI
+    if RALLY_DEBUG:
+        try:
+            roi, _ = crop_roi(img, RALLY_TRIGGER_ROI)
+            cv2.imwrite(os.path.join(DEBUG_RALLY_DIR, "trigger_roi.png"), roi)
+        except Exception as e:
+            log_event(f"[RALLY DEBUG] ROI error: {e}")
+
 def forziere_flow_tick():
     flow = forziere_flow_holder.get("flow")
     if flow is None:
@@ -619,19 +646,17 @@ def treasure_watcher(stop_evt: threading.Event):
             log_event(f"[TREASURE] RILEVATO {name} score={score:.3f} thr={MATCH_THRESHOLD_TREASURE}")
             send_notification(f"🎁 Tesoro rilevato! ({name}) score={score:.2f}")
 
-            start_treasure_recording("treasure")
-            threading.Timer(TREASURE_RECORD_SECONDS + 5, stop_treasure_recording).start()
+            if ENABLE_TREASURE_FLOW:
+                start_treasure_recording("treasure")
+                threading.Timer(TREASURE_RECORD_SECONDS + 5, stop_treasure_recording).start()
 
-            WORKFLOW_MANAGER.force(Workflow.TREASURE)
+                WORKFLOW_MANAGER.force(Workflow.TREASURE)
 
-            if WORKFLOW_MANAGER.acquire(Workflow.TREASURE):
-                # 0) TAP sul tesoro appena rilevato (apre la chat)
-                cx, cy = tap_match_in_fullscreen(coords, loc, hw)
-                log_event(f"[TREASURE] tap icon @ {cx},{cy} -> open chat")
+                log_event("[TREASURE] detected → starting treasure flow")
 
-            TREASURE_FLOW_EVENT.set()
-            WORKFLOW_MANAGER.preempt_lower_priority(Workflow.TREASURE)
-            treasure_flow_watcher.flow.trigger()
+                TREASURE_FLOW_EVENT.set()
+                WORKFLOW_MANAGER.preempt_lower_priority(Workflow.TREASURE)
+                treasure_flow_watcher.flow.trigger(coords, loc, hw)
 
             last_alert = now
             hits = 0
@@ -931,18 +956,16 @@ def treasure_watcher_loop(stop_evt):
             log_event(f"[TREASURE] RILEVATO {name} score={score:.3f}")
             send_notification(f"🎁 Tesoro rilevato! ({name})")
 
-            start_treasure_recording("treasure")
+            if ENABLE_TREASURE_FLOW:
+                start_treasure_recording("treasure")
+    
+                WORKFLOW_MANAGER.force(Workflow.TREASURE)
+    
+                TREASURE_FLOW_EVENT.set()
+                WORKFLOW_MANAGER.preempt_lower_priority(Workflow.TREASURE)
+    
+                treasure_flow_watcher.flow.trigger(coords, loc, hw)
 
-            WORKFLOW_MANAGER.force(Workflow.TREASURE)
-
-            if WORKFLOW_MANAGER.acquire(Workflow.TREASURE):
-                cx, cy = tap_match_in_fullscreen(coords, loc, hw)
-                log_event(f"[TREASURE] tap icon @ {cx},{cy} -> open chat")
-                time.sleep(1.5)
-
-            TREASURE_FLOW_EVENT.set()
-            WORKFLOW_MANAGER.preempt_lower_priority(Workflow.TREASURE)
-            treasure_flow_watcher.flow.trigger()
             last_alert = now
             hits = 0
 
@@ -1311,12 +1334,15 @@ def main():
         donation_flow_holder["flow"] = DonationFlow(log_event)
         ministry_flow_holder["flow"] = MinistryFlow(log_fn=log_event)  
         forziere_flow_holder["flow"] = ForziereFlow(log_event)
+        rally_flow_holder["flow"] = RallyFlow(log_event)
+
         dflow = donation_flow_holder.get("flow")
         mflow = ministry_flow_holder.get("flow")
         fflow = forziere_flow_holder.get("flow")
         heal_flow = HealFlow(log_event)
         research_flow_holder["flow"] = ResearchFlow(log_event)
         rflow = research_flow_holder.get("flow")
+        rally_flow = rally_flow_holder.get("flow")
 
         #LOGICA SEQUENZIALE
         try:
@@ -1400,16 +1426,28 @@ def main():
                forziere_flow_tick()
 
                # 9. Research
-#               if (
-#                   rflow is not None
-#                   and rflow.state.name == "IDLE"
-#                   and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
-#                   and not WORKFLOW_MANAGER.is_active(Workflow.RESEARCH)
-#                   and WORKFLOW_MANAGER.can_run(Workflow.RESEARCH)
-#               ):
-#                   rflow.trigger()
-#               
-#               research_flow_tick()
+               if (
+                   rflow is not None
+                   and rflow.state.name == "IDLE"
+                   and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.RESEARCH)
+                   and WORKFLOW_MANAGER.can_run(Workflow.RESEARCH)
+               ):
+                   rflow.trigger()
+               
+               research_flow_tick()
+
+               # 10. Rally Flow
+               if ENABLE_RALLY_FLOW:
+               
+                   if (
+                       rally_flow is not None
+                       and rally_flow.state.name == "IDLE"
+                       and WORKFLOW_MANAGER.can_run(Workflow.RALLY)
+                   ):
+                       rally_flow.trigger()
+               
+                   rally_flow_tick()
    
                # Dopo ogni ciclo, puoi dormire un attimo
                time.sleep(0.1)

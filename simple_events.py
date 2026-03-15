@@ -1,32 +1,31 @@
 # --------------------
 # ROI DEFINITIONS
 # --------------------
+# ROI tutto schermo:
+# "roi": (0.0, 1.0, 0.0, 1.0),
 
 SIMPLE_EVENTS = {
     "heal_finished": {
         "templates": "heal_finished",
-#        "roi": (0.0, 1.0, 0.0, 1.0),
         "roi": (0.697, 0.937, 0.581, 0.693),
         "threshold": 0.88,
         "cooldown": 1,
     },
     "colleague": {
         "templates": "colleague",
-        #roi": (0.0, 1.0, 0.0, 1.0),
         "roi": (0.719, 0.857, 0.730, 0.793),
         "threshold": 0.75,
         "cooldown": 1,
     },
     "heal_help": {
         "templates": "heal_help",
-        #"roi": (0.0, 1.0, 0.0, 1.0),
         "roi": (0.697, 0.937, 0.581, 0.693),
         "threshold": 0.88,
         "cooldown": 1,
     },
     "back_home": {
         "templates": "back_home",
-        "roi": (0.0, 1.00, 0.0, 1.0),
+        "roi": (0.75, 1.0, 0.75, 1.0),
         "threshold": 0.9,
         "cooldown": 10,
         "tap": "bottom_right",

@@ -8,7 +8,13 @@ from datetime import datetime
 ADB_CMD = "adb"
 
 DEBUG = False
-DEBUG_DIR = "debug/forziere"
+DEBUG_DIR = "debug/donation"
+
+def adb_long_press(x, y, duration_ms=3000):
+    subprocess.run([
+        "adb", "shell", "input", "swipe",
+        str(x), str(y), str(x), str(y), str(duration_ms)
+    ])
 
 def adb_keyevent(code: int):
     subprocess.run([ADB_CMD, "shell", "input", "keyevent", str(code)])
@@ -112,4 +118,26 @@ def match_any(img, templates):
             best_hw = (th, tw)
 
     return best_name, best_score, best_loc, best_hw
+
+def tap_match_in_fullscreen(roi_coords, match_loc, tmpl_hw):
+    """
+    Converte coordinate match ROI → coordinate schermo e fa tap.
+    roi_coords può essere:
+      (xs, ys)        → offset ROI
+      (xs, ys, xe, ye) → bounding box ROI
+    """
+    if len(roi_coords) == 2:
+        xs, ys = roi_coords
+    else:
+        xs, ys = roi_coords[0], roi_coords[1]
+
+    mx, my = match_loc
+    th, tw = tmpl_hw
+
+    cx = xs + mx + tw // 2
+    cy = ys + my + th // 2
+
+    adb_tap(cx, cy)
+
+    return cx, cy
 
