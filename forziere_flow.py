@@ -71,6 +71,11 @@ class ForziereFlow:
 
     # --------------------------------------------------------
 
+    def is_forziere_visible(self, img):
+        roi, _ = crop_roi(img, ROI_FORZIERE)
+        name, score, loc, hw = match_any(roi, self.templates["forziere_full"])
+        return bool(name and score >= THR_FORZIERE), name, score, loc, hw
+
     def _cooldown_ok(self):
         return (time.time() - self.last_action_ts) >= ACTION_COOLDOWN
 

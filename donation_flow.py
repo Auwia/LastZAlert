@@ -42,7 +42,7 @@ ROI_COOLDOWN = (0.20, 0.95, 0.70, 0.92)
 DEFAULT_COOLDOWN = 60
 ACTION_COOLDOWN_SEC = 1.0
 
-DONATION_HOLD_MS = 4000   # 4 secondi tengono premuto
+DONATION_HOLD_MS = 7000   # 7 secondi tengono premuto
 
 # ============================================================
 # OCR
@@ -351,24 +351,26 @@ class DonationFlow:
         # 6) Donate loop
         # ----------------------------------------------------
         if self.state == DonationState.DONATE_LOOP:
-            if self.attempts_left <= 0:
-                self.state = DonationState.READ_COOLDOWN
-                self._mark_action()
-                return
-
+        
             name, score, loc, hw = match_any(img, self.templates["donate_button"])
+        
             if name and score >= THR:
                 cx = loc[0] + hw[1] // 2
                 cy = loc[1] + hw[0] // 2
-                #adb_tap(cx, cy)
-                self.log(f"[DONATION-FLOW] HOLD donate for {DONATION_HOLD_MS} ms")                
+        
+                self.log(f"[DONATION-FLOW] HOLD donate for {DONATION_HOLD_MS} ms")
+        
                 adb_long_press(cx, cy, DONATION_HOLD_MS)
+        
                 self.attempts_left = 0
-                time.sleep(0.5) 
+                time.sleep(0.5)
+        
                 self.last_progress_ts = time.time()
-                self.log(f"[DONATION-FLOW] donate, left={self.attempts_left}")
+        
                 self.state = DonationState.READ_COOLDOWN
+        
                 self._mark_action()
+        
             return
 
         # ----------------------------------------------------

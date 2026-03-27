@@ -16,6 +16,7 @@ from forziere_flow import ForziereFlow
 from heal_flow import HealFlow
 from research_flow import ResearchFlow
 from rally_flow import RallyFlow, RALLY_TRIGGER_ROI
+from treasure_flow_simplified import TreasureFlowSimplified
 
 import cv2
 import numpy as np
@@ -31,6 +32,9 @@ PACKAGE_NAME = "com.readygo.barrel.gp"
 USE_SEQUENTIAL = True
 ENABLE_MULTI_RESOURCE_COLLECTION = True
 ENABLE_TREASURE_FLOW = False
+ENABLE_TREASURE_FLOW_SIMPLIFIED = True
+
+ENABLE_MINISTRY_FLOW = True
 
 ENABLE_RALLY_FLOW = True
 RALLY_DEBUG = True
@@ -54,6 +58,7 @@ ministry_flow_holder = {"flow": None}
 forziere_flow_holder = {"flow": None}
 research_flow_holder = {"flow": None}
 rally_flow_holder = {"flow": None}
+treasure_flow_simplified_holder = {"flow": None}
 
 # Discord webhook (ATTENZIONE: se pubblico, meglio metterlo in env var)
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1446565181265154190/pL-0gcgP09RlQqnqHqQDIdQqm505tqa744is2R_1eGA3Had4OXmhPgQrTLYXYzaMld0S"
@@ -106,7 +111,7 @@ HQ_OPEN_ROI    = (0.30, 0.70, 0.45, 0.80)   # bottone Open
 HQ_CONFIRM_ROI = (0.25, 0.75, 0.60, 0.90)   # bottone Confirm
 
 # Screenshot condiviso (riuso screen_treasure.png come "shared frame")
-CHECK_INTERVAL_SEC = 1
+CHECK_INTERVAL_SEC = 0.3
 SCREENSHOT_PATH = os.path.join(DEBUG_DIR, "screen_treasure.png")
 SCREENSHOT_ERROR_COUNT = 0
 SCREENSHOT_ERROR_MAX = 3
@@ -610,6 +615,17 @@ def start_treasure_recording_bkp(tag: str = "treasure"):
 # THREAD 1: TREASURE WATCHER
 # ============================================================
 
+def treasure_flow_simplified_tick():
+    flow = treasure_flow_simplified_holder.get("flow")
+    if flow is None:
+        return
+
+    with SCREENSHOT_LOCK:
+        img = load_image(SCREENSHOT_PATH)
+
+    if img is not None:
+        flow.step(img)
+
 def treasure_watcher(stop_evt: threading.Event):
     templates = load_templates_from_dir(TEMPLATES_TREASURES_DIR)
     if not templates:
@@ -645,6 +661,15 @@ def treasure_watcher(stop_evt: threading.Event):
         if hits >= CONSECUTIVE_HITS_REQUIRED_TREASURE and (now - last_alert) >= MIN_SECONDS_BETWEEN_TREASURE_ALERTS:
             log_event(f"[TREASURE] RILEVATO {name} score={score:.3f} thr={MATCH_THRESHOLD_TREASURE}")
             send_notification(f"🎁 Tesoro rilevato! ({name}) score={score:.2f}")
+
+            if ENABLE_TREASURE_FLOW_SIMPLIFIED:
+                WORKFLOW_MANAGER.force(Workflow.TREASURE)
+            
+                flow = treasure_flow_simplified_holder.get("flow")
+                if flow:
+                    flow.trigger(coords, loc, hw)
+            
+                log_event("[TREASURE] detected → starting simplified flow")
 
             if ENABLE_TREASURE_FLOW:
                 start_treasure_recording("treasure")
@@ -956,6 +981,15 @@ def treasure_watcher_loop(stop_evt):
             log_event(f"[TREASURE] RILEVATO {name} score={score:.3f}")
             send_notification(f"🎁 Tesoro rilevato! ({name})")
 
+            if ENABLE_TREASURE_FLOW_SIMPLIFIED:
+                WORKFLOW_MANAGER.force(Workflow.TREASURE)
+            
+                flow = treasure_flow_simplified_holder.get("flow")
+                if flow:
+                    flow.trigger(coords, loc, hw)
+            
+                log_event("[TREASURE] detected → starting simplified flow")
+    
             if ENABLE_TREASURE_FLOW:
                 start_treasure_recording("treasure")
     
@@ -1335,6 +1369,7 @@ def main():
         ministry_flow_holder["flow"] = MinistryFlow(log_fn=log_event)  
         forziere_flow_holder["flow"] = ForziereFlow(log_event)
         rally_flow_holder["flow"] = RallyFlow(log_event)
+        treasure_flow_simplified_holder["flow"] = TreasureFlowSimplified(log_event)
 
         dflow = donation_flow_holder.get("flow")
         mflow = ministry_flow_holder.get("flow")
@@ -1349,6 +1384,7 @@ def main():
             while not stop_evt.is_set():
                # 1. Tesori
                treasure_watcher_tick(stop_evt)
+               treasure_flow_simplified_tick()
                 
                # 2. Heal
                if (
@@ -1394,26 +1430,26 @@ def main():
                donation_flow_tick()
 
                # 7. Ministry
-               if (mflow is not None and mflow.state.name == "IDLE" and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC) and WORKFLOW_MANAGER.can_run(Workflow.MINISTRY) and not WORKFLOW_MANAGER.is_active(Workflow.MINISTRY)):
-                   if time.time() >= mflow.cooldown_until:
-                       # aspetta nuovo frame (evita screenshot donation)
-                       wait_new_frame(0.8)
+               if ENABLE_MINISTRY_FLOW:
+                   if (mflow is not None and mflow.state.name == "IDLE" and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC) and WORKFLOW_MANAGER.can_run(Workflow.MINISTRY) and not WORKFLOW_MANAGER.is_active(Workflow.MINISTRY)):
+                       if time.time() >= mflow.cooldown_until:
+                           # aspetta nuovo frame (evita screenshot donation)
+                           #wait_new_frame(0.8)
 
-                       img = load_image(SCREENSHOT_PATH)
-                       if img is not None:
-                           if not WORKFLOW_MANAGER.is_active(Workflow.MINISTRY):
-                               officer_visible = officer_icon_visible(img)
-                           else:
-                               officer_visible = True
+                           img = load_image(SCREENSHOT_PATH)
+                           if img is not None:
+                               if not WORKFLOW_MANAGER.is_active(Workflow.MINISTRY):
+                                   officer_visible = officer_icon_visible(img)
+                               else:
+                                   officer_visible = True
 
-                           if not officer_visible:
-                               mflow.trigger()
-                           else:
-                               if not DEBUG_EVENTS_ONLY:
-                                   log_event("[MINISTRY] officer icon visibile → skip trigger")
+                               if not officer_visible:
+                                   mflow.trigger()
+                               else:
+                                   if not DEBUG_EVENTS_ONLY:
+                                       log_event("[MINISTRY] officer icon visibile → skip trigger")
 
-               ministry_flow_tick()
-#               print("\n[!] Ministry flow Disabled!")
+                   ministry_flow_tick()
 
                # 8. Forziere
                if (
@@ -1422,7 +1458,13 @@ def main():
                    and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
                    and WORKFLOW_MANAGER.can_run(Workflow.FORZIERE)
                ):
-                   fflow.trigger()
+                   img = load_image(SCREENSHOT_PATH)
+                   if img is not None:
+                       visible, name, score, loc, hw = fflow.is_forziere_visible(img)
+                       if visible:
+                           log_event(f"[FORZIERE-FLOW] trigger visibile score={score:.3f}")
+                           fflow.trigger()
+                
                forziere_flow_tick()
 
                # 9. Research
@@ -1447,7 +1489,10 @@ def main():
                    ):
                        rally_flow.trigger()
                
+               if WORKFLOW_MANAGER.is_active(Workflow.RALLY):
                    rally_flow_tick()
+                   time.sleep(0.05)
+                   continue
    
                # Dopo ogni ciclo, puoi dormire un attimo
                time.sleep(0.1)
