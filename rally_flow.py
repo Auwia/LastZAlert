@@ -52,6 +52,9 @@ class RallyFlow:
 
     def trigger(self):
 
+        if self.state != RallyState.IDLE:
+            return
+
         if not WORKFLOW_MANAGER.acquire(Workflow.RALLY):
             return
 
@@ -62,6 +65,7 @@ class RallyFlow:
     def step(self, img):
 
         if self.state == RallyState.IDLE:
+            WORKFLOW_MANAGER.release(Workflow.RALLY)
             return
 
         if time.time() < self.cooldown_until:
