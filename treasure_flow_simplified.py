@@ -29,7 +29,7 @@ CONGR_DIR = os.path.join(BASE_DIR, "congratulations")
 THR_CHAT = 0.65
 THR_CHAT_UI = 0.60
 THR_ICON = 0.55
-THR_TOKEN = 0.70
+THR_TOKEN = 0.50
 THR_CONGR = 0.70
 
 # =========================
@@ -231,12 +231,22 @@ class TreasureFlowSimplified:
         if self.state == State.WAIT_TOKEN:
             best, score = match_any(img, self.t_token)
 
+            self.log(f"[WAIT_TOKEN] token_score={score:.3f} time={self._seconds_in_state():.2f}")
+
             if best and score >= THR_TOKEN:
                 _, loc, size = best
                 tap_match((0, 0, img.shape[1], img.shape[0]), loc, size)
                 self._mark_action()
                 self.set_state(State.WAIT_CONGR)
                 return
+            else:
+                  # 🔍 debug
+                  self.log(f"[WAIT_TOKEN] token_score={score:.3f} time={self._seconds_in_state():.2f}")
+          
+                  # 📸 salva screenshot (sempre stesso file)
+                  import os
+                  os.makedirs("debug/treasure", exist_ok=True)
+                  cv2.imwrite("debug/treasure/wait_token.png", img)
 
             if self._seconds_in_state() > TIMEOUT_TOKEN_SEC:
                 self.set_state(State.DONE)

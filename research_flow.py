@@ -225,6 +225,11 @@ class ResearchFlow:
                 self._mark()
                 return
 
+
+            # chiudi popup (max level ecc.)
+            adb_tap(50, 50)  # tap fuori popup
+            time.sleep(0.3)
+
             # no research -> try next node
             self.state = ResearchState.SCAN_NODE
             self._mark()
