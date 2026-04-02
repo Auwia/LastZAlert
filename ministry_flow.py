@@ -243,6 +243,58 @@ class MinistryState(Enum):
 # ============================================================
 
 class MinistryFlow:
+    def _schedule_confirm_popup_cleanup(self, delay_sec: int):
+        import threading
+    
+        # anticipo + ritardo (tolleranza)
+        early = max(0, delay_sec - 10)
+        late  = delay_sec + 20
+    
+        def worker():
+            self.log(f"[MINISTRY] popup cleanup scheduled in {early}s")
+    
+            time.sleep(early)
+    
+            start = time.time()
+            timeout = late - early
+    
+            while time.time() - start < timeout:
+                try:
+                    ctx = self.screenshot_ctx
+                    SCREENSHOT_PATH = ctx["path"]
+                    SCREENSHOT_LOCK = ctx["lock"]
+                    load_image = ctx["load_image"]
+
+                    from simple_events import SIMPLE_EVENTS
+                    from bot_utils import match_any
+    
+                    with SCREENSHOT_LOCK:
+                        img = load_image(SCREENSHOT_PATH)
+    
+                    if img is None:
+                        time.sleep(0.5)
+                        continue
+    
+                    cfg = SIMPLE_EVENTS["confirm_popup"]
+                    roi, coords = crop_roi(img, cfg["roi"])
+                    templates = load_templates(cfg["templates"])
+    
+                    name, score, loc, hw = match_any(roi, templates)
+    
+                    if score >= cfg["threshold"]:
+                        self.log("[MINISTRY] confirm popup detected → closing")
+                        adb_tap(50, 50)  # OUTSIDE
+                        return
+    
+                except Exception as e:
+                    self.log(f"[MINISTRY] popup watcher error: {e}")
+    
+                time.sleep(0.5)
+    
+            self.log("[MINISTRY] popup cleanup timeout")
+    
+        threading.Thread(target=worker, daemon=True).start()
+
     def _tap_template(self, img, key, next_state=None, offset=(0,0), score_thr=THR):
         name, score, loc, hw = match_any(img, self.templates[key])
         if name and score >= score_thr:
@@ -363,8 +415,9 @@ class MinistryFlow:
     
         return ratio > 0.03
 
-    def __init__(self, log_fn=print):
+    def __init__(self, log_fn=print, screenshot_ctx=None):
         self.log = log_fn
+        self.screenshot_ctx = screenshot_ctx
         self.state = MinistryState.IDLE
         self.last_action_ts = 0.0
         self.templates = _load_ministry_templates()
@@ -662,6 +715,7 @@ class MinistryFlow:
         
             # caso 3: compare davvero il bottone Confirm
             if self._tap_template(img, "confirm", MinistryState.READ_APPLICATION_NOTE):
+                time.sleep(0.4)
                 return
         
             # altrimenti: aspetta frame successivo (NO timeout qui)
@@ -681,14 +735,18 @@ class MinistryFlow:
             start_ts = _parse_application_note(txt)
         
             # --- FALLBACK OBBLIGATORIO ---
+            delay = 0
             if start_ts is None:
                 self.log("[MINISTRY] application note non leggibile → cooldown forzato 10 min")
                 cooldown = int(time.time()) + 600
                 self.cooldown_until = cooldown
             else:
+                delay = start_ts - int(time.time())
                 cooldown = start_ts + 600
                 self.cooldown_until = cooldown 
                 self.log(f"[MINISTRY] cooldown until {time.ctime(cooldown)}")
+            if delay > 0:
+                self._schedule_confirm_popup_cleanup(delay)
         
             self.log(f"[MINISTRY] ministry finished, cooldown ignored")
             self.state = MinistryState.EXIT_MINISTRY
