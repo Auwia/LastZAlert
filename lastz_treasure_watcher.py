@@ -1391,6 +1391,9 @@ def main():
                    heal_flow.state.name == "IDLE"
                    and WORKFLOW_MANAGER.can_run(Workflow.HEAL)
                    and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.TREASURE)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.MINISTRY)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.RALLY)
                ):
                    heal_flow.trigger()
                
@@ -1398,7 +1401,7 @@ def main():
                if img is not None:
                    heal_flow.step(img)
                 
-               # 3. Treasure flow (quando triggerato)
+               # 3. Treasure flow 
                treasure_flow_watcher_tick()
                 
                # 4. HQ gifts
@@ -1415,6 +1418,9 @@ def main():
                if (
                    not WORKFLOW_MANAGER.is_active(Workflow.HEAL)
                    and not WORKFLOW_MANAGER.is_active(Workflow.RESEARCH)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.RALLY)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.MINISTRY)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.TREASURE)
                ):
                    if DEBUG:
                        log_event("[SIMPLE EVENTS] running")
@@ -1434,16 +1440,21 @@ def main():
                    if (mflow is not None and mflow.state.name == "IDLE" and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC) and WORKFLOW_MANAGER.can_run(Workflow.MINISTRY) and not WORKFLOW_MANAGER.is_active(Workflow.MINISTRY)):
                        if time.time() >= mflow.cooldown_until:
                            # aspetta nuovo frame (evita screenshot donation)
-                           #wait_new_frame(0.8)
+                           wait_new_frame(0.5)
 
                            img = load_image(SCREENSHOT_PATH)
                            if img is not None:
                                if not WORKFLOW_MANAGER.is_active(Workflow.MINISTRY):
                                    officer_visible = officer_icon_visible(img)
+                                   if not officer_visible:
+                                       mflow.trigger()
+                                   else:
+                                       if not DEBUG_EVENTS_ONLY:
+                                           log_event("[MINISTRY] skip trigger → officer/apply already present")
                                else:
                                    officer_visible = True
 
-                               if not officer_visible:
+                               if not officer_visible and time.time() >= mflow.cooldown_until:
                                    mflow.trigger()
                                else:
                                    if not DEBUG_EVENTS_ONLY:
@@ -1457,6 +1468,10 @@ def main():
                    and fflow.state.name == "IDLE"
                    and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
                    and WORKFLOW_MANAGER.can_run(Workflow.FORZIERE)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.MINISTRY)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.TREASURE)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.HEAL)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.RALLY)
                ):
                    img = load_image(SCREENSHOT_PATH)
                    if img is not None:
@@ -1473,6 +1488,10 @@ def main():
                    and rflow.state.name == "IDLE"
                    and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
                    and not WORKFLOW_MANAGER.is_active(Workflow.RESEARCH)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.RALLY)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.MINISTRY)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.TREASURE)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.HEAL)
                    and WORKFLOW_MANAGER.can_run(Workflow.RESEARCH)
                ):
                    rflow.trigger()
@@ -1487,7 +1506,13 @@ def main():
                        and rally_flow.state.name == "IDLE"
                        and WORKFLOW_MANAGER.can_run(Workflow.RALLY)
                    ):
-                       rally_flow.trigger()
+                       img = load_image(SCREENSHOT_PATH)
+                       if img is not None:
+                           roi, _ = crop_roi(img, RALLY_TRIGGER_ROI)
+                           name, score, _, _ = match_any(roi, rally_flow.trigger_templates)
+                       
+                           if score >= 0.80:
+                               rally_flow.trigger()
                
                if WORKFLOW_MANAGER.is_active(Workflow.RALLY):
                    rally_flow_tick()
