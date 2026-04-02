@@ -56,6 +56,7 @@ class RallyFlow:
             return
 
         if not WORKFLOW_MANAGER.acquire(Workflow.RALLY):
+            self.log("[RALLY] acquire failed")
             return
 
         self.log("[RALLY] trigger start")
@@ -65,7 +66,7 @@ class RallyFlow:
     def step(self, img):
 
         if self.state == RallyState.IDLE:
-            WORKFLOW_MANAGER.release(Workflow.RALLY)
+            #WORKFLOW_MANAGER.release(Workflow.RALLY)
             return
 
         if time.time() < self.cooldown_until:
@@ -98,19 +99,18 @@ class RallyFlow:
         # -----------------------------------------
 
         if self.state == RallyState.FIND_MONSTER:
-
             roi, coords = crop_roi(img,RALLY_MONSTER_ROI)
-
             name, score, loc, hw = match_any(roi,self.monster_templates)
 
             if score >= MONSTER_THRESHOLD:
-
                 self.log(f"[RALLY] monster found {name}")
-
                 self.state = RallyState.CLICK_ADD
                 self.cooldown_until = time.time()+1
                 return
-
+            else:
+                self.log("[RALLY] no monster in ROI")
+                self.finish()
+                return
 
         # -----------------------------------------
         # CLICK ADD

@@ -203,8 +203,9 @@ class HealFlow:
 
             self.log(f"[HEAL-FLOW] batch set (ROI) = {HEAL_BATCH}")
             if self.heal_icon_xy:
-                time.sleep(0.4)
+                time.sleep(0.3)
                 adb_tap(*self.heal_icon_xy)
+                time.sleep(0.5)
                 if DEBUG:
                     self.log(f"[HEAL-FLOW] back tap @ {self.heal_icon_xy}")
 

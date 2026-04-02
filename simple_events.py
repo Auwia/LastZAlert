@@ -44,7 +44,6 @@ SIMPLE_EVENTS = {
         "roi": (0.0, 1.00, 0.0, 1.0),
         "threshold": 0.9,
         "cooldown": 2,
-        "tap": "center",
         "log": "[CANCEL_POPUP]",
     },
     "electricity": {

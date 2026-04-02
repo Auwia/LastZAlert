@@ -432,8 +432,16 @@ class MinistryFlow:
 
         # --- Step machine below ---
         if self.state == MinistryState.TAP_MAP:
-            if self._tap_template(img, "map", MinistryState.TAP_SEARCH):
-                return
+            name, score, loc, hw = match_any(img, self.templates["map"])
+            self.log(f"[MINISTRY] TAP_MAP match={name} score={score:.3f}")
+        
+            if name and score >= THR:
+                adb_tap(loc[0] + hw[1] // 2, loc[1] + hw[0] // 2)
+                time.sleep(0.4)
+                self.log(f"[MINISTRY] tap map score={score:.3f}")
+                self.state = MinistryState.TAP_SEARCH
+                self._mark_action()
+            return
 
         if self.state == MinistryState.TAP_SEARCH:
             if self._tap_template(img, "search", MinistryState.TAP_SPECIAL):
