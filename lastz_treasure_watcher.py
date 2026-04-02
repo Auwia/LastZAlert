@@ -1366,7 +1366,7 @@ def main():
         threading.Thread(target=screenshot_producer, args=(stop_evt,), daemon=True).start()
         treasure_flow_watcher.flow = TreasureFlow(log_fn=log_event, stop_record_fn=stop_treasure_recording)
         donation_flow_holder["flow"] = DonationFlow(log_event)
-        ministry_flow_holder["flow"] = MinistryFlow(log_fn=log_event)  
+        ministry_flow_holder["flow"] = MinistryFlow(log_fn=log_event, screenshot_ctx={"path": SCREENSHOT_PATH,"lock": SCREENSHOT_LOCK, "load_image": load_image})
         forziere_flow_holder["flow"] = ForziereFlow(log_event)
         rally_flow_holder["flow"] = RallyFlow(log_event)
         treasure_flow_simplified_holder["flow"] = TreasureFlowSimplified(log_event)
