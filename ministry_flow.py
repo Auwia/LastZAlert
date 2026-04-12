@@ -42,15 +42,36 @@ ROI_OFFICER_DURATION = (0.18, 0.78, 0.34, 0.46)
 
 CENTER_SCREEN = (540, 960)
 BOTTOM_LEFT = (100, 2400)
+BOTTOM_LEFT_PIXEL = (80, 2200)
 BOTTOM_RIGHT = (1000, 2400)
 
 # ============================================================
 # OCR
 # ============================================================
+def _normalize_time_text(txt: str) -> str:
+    if not txt:
+        return ""
+
+    txt = txt.strip()
+
+    # rimuove spazi attorno ai due punti
+    txt = re.sub(r"\s*:\s*", ":", txt)
+
+    # rimuove spazi tra numeri (es: "4 8" → "48")
+    txt = re.sub(r"(?<=\d)\s+(?=\d)", "", txt)
+
+    # rimuove caratteri strani tipo newline
+    txt = txt.replace("\n", "").replace("\r", "")
+
+    return txt
+
 def _parse_hhmmss(txt: str) -> Optional[int]:
+    txt = _normalize_time_text(txt)
+
     m = re.search(r"(\d{1,2}:\d{2}:\d{2})", txt)
     if not m:
         return None
+
     h, m_, s = map(int, m.group(1).split(":"))
     return h*3600 + m_*60 + s
 
@@ -65,6 +86,8 @@ def _ocr_duration(img):
 
 def _parse_application_note(txt: str) -> Optional[int]:
     txt = txt.strip()
+
+    txt = _normalize_time_text(txt)
 
     # cerca QUALSIASI hh:mm:ss nel testo
     m = re.search(r"(\d{1,2}:\d{2}:\d{2})", txt)
@@ -421,8 +444,8 @@ class MinistryFlow:
         self.state = MinistryState.IDLE
         self.last_action_ts = 0.0
         self.templates = _load_ministry_templates()
-        self.x = 0
-        self.y = 0
+        self.x = None
+        self.y = None
         self.xy_read = False
         self.cooldown_until = 0
         self.returning_to_construction = False
@@ -531,7 +554,8 @@ class MinistryFlow:
         if self.state == MinistryState.READ_X:
             time.sleep(0.3)
             if self._precheck_exit(img):
-                self.state = MinistryState.READ_APPLICATION_NOTE
+                self.log("[MINISTRY] precheck exit → EXIT_MINISTRY")
+                self.state = MinistryState.EXIT_MINISTRY
                 self._mark_action()
                 return
 
@@ -597,7 +621,8 @@ class MinistryFlow:
         if self.state == MinistryState.READ_Y:
             time.sleep(0.3)
             if self._precheck_exit(img):
-                self.state = MinistryState.READ_APPLICATION_NOTE
+                self.log("[MINISTRY] precheck exit → EXIT_MINISTRY")
+                self.state = MinistryState.EXIT_MINISTRY
                 self._mark_action()
                 return
 
@@ -737,7 +762,16 @@ class MinistryFlow:
             # --- FALLBACK OBBLIGATORIO ---
             delay = 0
             if start_ts is None:
-                self.log("[MINISTRY] application note non leggibile → cooldown forzato 10 min")
+                self.log("[MINISTRY] application note non leggibile → possibile coda=0")
+            
+                # --- NUOVA LOGICA ---
+                if self.x == 0 or self.y == 0:
+                    self.log("[MINISTRY] coda=0 + OCR vuoto → tap extra per uscire")
+                    adb_tap(*BOTTOM_LEFT)
+                    time.sleep(0.4)
+            
+                # fallback cooldown
+                self.log("[MINISTRY] cooldown forzato 10 min")
                 cooldown = int(time.time()) + 600
                 self.cooldown_until = cooldown
             else:
