@@ -3,13 +3,16 @@
 
 import os
 import time
+import subprocess
 from enum import Enum
 
 from workflow_manager import WORKFLOW_MANAGER, Workflow
-from bot_utils import crop_roi, match_any, tap_match_in_fullscreen, load_templates
+from bot_utils import crop_roi, match_any, tap_match_in_fullscreen, load_templates, adb_tap
 
 import cv2
 
+BOTTOM_LEFT = (100, 2400)
+BOTTOM_RIGHT = (1000, 2400)
 
 #RALLY_TRIGGER_ROI = (0.05, 0.45, 0.68, 0.88)
 RALLY_TRIGGER_ROI = (0.05, 0.58, 0.78, 0.98)
@@ -17,7 +20,7 @@ RALLY_MONSTER_ROI = (0.00, 1.00, 0.10, 0.80)
 
 TRIGGER_THRESHOLD = 0.80
 MONSTER_THRESHOLD = 0.80
-ADD_THRESHOLD = 0.80
+ADD_THRESHOLD = 0.90
 READY_THRESHOLD = 0.80
 MARCH_THRESHOLD = 0.80
 CONFIRM_THRESHOLD = 0.80
@@ -108,6 +111,7 @@ class RallyFlow:
                 self.cooldown_until = time.time()+1
                 return
             else:
+                adb_tap(*BOTTOM_LEFT)
                 self.log("[RALLY] no monster in ROI")
                 self.finish()
                 return
@@ -129,6 +133,11 @@ class RallyFlow:
                 self.state = RallyState.CHECK_READY
                 self.cooldown_until = time.time()+2
                 return
+            else:
+                self.log(f"[RALLY] add not clickable (score={score:.3f}) → exit")
+                adb_tap(*BOTTOM_LEFT)
+                self.finish()
+                return
 
 
         # -----------------------------------------
@@ -147,7 +156,7 @@ class RallyFlow:
                 return
 
             else:
-
+                adb_tap(*BOTTOM_LEFT)
                 self.log("[RALLY] no vehicle available")
                 self.finish()
                 return
