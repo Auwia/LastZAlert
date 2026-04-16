@@ -26,11 +26,11 @@ CONGR_DIR = os.path.join(BASE_DIR, "congratulations")
 # =========================
 # THRESHOLDS
 # =========================
-THR_CHAT = 0.65
-THR_CHAT_UI = 0.60
-THR_ICON = 0.55
-THR_TOKEN = 0.50
-THR_CONGR = 0.70
+THR_CHAT = 0.73
+THR_CHAT_UI = 0.73
+THR_ICON = 0.73
+THR_TOKEN = 0.73
+THR_CONGR = 0.73
 
 # =========================
 # ROI
@@ -211,27 +211,22 @@ class TreasureFlowSimplified:
                 _, loc, size = best
                 tap_match((0, 0, img.shape[1], img.shape[0]), loc, size)
                 self._mark_action()
-                self.set_state(State.WAIT_HELI_DISAPPEAR)
+                self.set_state(State.WAIT_TOKEN)
                 return
 
             if self._seconds_in_state() > TIMEOUT_MAP_ICONS_SEC:
                 self.set_state(State.DONE)
             return
 
-        if self.state == State.WAIT_HELI_DISAPPEAR:
-            best, score = match_any(img, self.t_icons)
-
-            if best and score >= THR_ICON:
-                self._mark_action()
-                return
-
-            self.set_state(State.WAIT_TOKEN)
-            return
-
         if self.state == State.WAIT_TOKEN:
             best, score = match_any(img, self.t_token)
+            heli_best, heli_score = match_any(img, self.t_icons)
 
-            self.log(f"[WAIT_TOKEN] token_score={score:.3f} time={self._seconds_in_state():.2f}")
+            self.log(f"[WAIT_TOKEN] heli={heli_score:.3f} token_score={score:.3f} time={self._seconds_in_state():.2f}")
+
+            # se elicottero visibile → reset timer 
+            if heli_best and heli_score >= THR_ICON:
+                self.state_enter_ts = time.time()
 
             if best and score >= THR_TOKEN:
                 _, loc, size = best
@@ -242,7 +237,6 @@ class TreasureFlowSimplified:
             else:
                   # 🔍 debug
                   self.log(f"[WAIT_TOKEN] token_score={score:.3f} time={self._seconds_in_state():.2f}")
-          
                   # 📸 salva screenshot (sempre stesso file)
                   import os
                   os.makedirs("debug/treasure", exist_ok=True)
