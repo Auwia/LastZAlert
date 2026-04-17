@@ -97,7 +97,7 @@ os.makedirs(DEBUG_DIR, exist_ok=True)
 os.makedirs(TREASURE_RECORD_DIR, exist_ok=True)
 
 # Heal config
-HEAL_BATCH_DEFAULT = 250
+HEAL_BATCH_DEFAULT = 100
 HEAL_BATCH_ALREADY_SET = False
 
 # HQ upgrade
@@ -1323,10 +1323,11 @@ def log(msg):
     print(msg)
 
 def main():
-    global SCIENCE_ICON_TEMPLATES, CONSTRUCTION_ICON_TEMPLATES
+    global SCIENCE_ICON_TEMPLATES, CONSTRUCTION_ICON_TEMPLATES, HEAL_ICON_TEMPLATES
 
     SCIENCE_ICON_TEMPLATES = load_templates_from_dir(SCIENCE_ICON_DIR)
     CONSTRUCTION_ICON_TEMPLATES = load_templates_from_dir(CONSTRUCTION_ICON_DIR)
+    HEAL_ICON_TEMPLATES = load_templates_from_dir(TEMPLATES_HEAL_DIR)
 
     print("=== Last Z Bot (Treasure + Heal, threaded) ===")
 
@@ -1387,15 +1388,30 @@ def main():
                treasure_flow_simplified_tick()
                 
                # 2. Heal
-               if (
-                   heal_flow.state.name == "IDLE"
-                   and WORKFLOW_MANAGER.can_run(Workflow.HEAL)
-                   and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
-                   and not WORKFLOW_MANAGER.is_active(Workflow.TREASURE)
-                   and not WORKFLOW_MANAGER.is_active(Workflow.MINISTRY)
-                   and not WORKFLOW_MANAGER.is_active(Workflow.RALLY)
-               ):
-                   heal_flow.trigger()
+               img = load_image(SCREENSHOT_PATH)
+               if img is not None:
+                   if (
+                       heal_flow.state.name == "IDLE"
+                       and WORKFLOW_MANAGER.can_run(Workflow.HEAL)
+                       and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
+                       and not WORKFLOW_MANAGER.is_active(Workflow.TREASURE)
+                       and not WORKFLOW_MANAGER.is_active(Workflow.MINISTRY)
+                       and not WORKFLOW_MANAGER.is_active(Workflow.RALLY)
+                   ):
+                       roi, coords = crop_roi(img, HEAL_ICON_ROI)
+                       name, score, loc, hw = match_any(roi, HEAL_ICON_TEMPLATES)
+               
+                       if score >= MATCH_THRESHOLD_HEAL:
+                           xs, ys, xe, ye = coords
+                           mx, my = loc
+                           th, tw = hw
+                           cx = xs + mx + tw // 2
+                           cy = ys + my + th // 2
+               
+                           heal_flow.trigger((cx, cy))
+                           log_event(f"[HEAL] cerotto rilevato {name} score={score:.3f} @ {cx},{cy}")
+               
+                   heal_flow.step(img)
                
                img = load_image(SCREENSHOT_PATH)
                if img is not None:

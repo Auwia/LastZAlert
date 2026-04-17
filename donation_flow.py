@@ -247,7 +247,7 @@ class DonationFlow:
                 if attempts is not None and attempts < 20:
                     missing = 20 - attempts
                     if attempts == 19:
-                        wait_seconds = 60
+                        wait_seconds = 60 * 5 
                     else:
                         wait_seconds = missing * 17 * 60
                     self.next_allowed = time.time() + wait_seconds
