@@ -26,10 +26,10 @@ CONGR_DIR = os.path.join(BASE_DIR, "congratulations")
 # =========================
 # THRESHOLDS
 # =========================
-THR_CHAT = 0.73
-THR_CHAT_UI = 0.73
-THR_ICON = 0.73
-THR_TOKEN = 0.73
+THR_CHAT = 0.70
+THR_CHAT_UI = 0.70
+THR_ICON = 0.70
+THR_TOKEN = 0.72
 THR_CONGR = 0.73
 
 # =========================
@@ -47,10 +47,10 @@ WAIT_AFTER_LINK_TAP_SEC = 1.2
 WAIT_AFTER_ICON_TAP_SEC = 1.0
 WAIT_AFTER_TOKEN_TAP_SEC = 1.0
 
-TIMEOUT_CHAT_LINK_SEC = 8.0
-TIMEOUT_MAP_ICONS_SEC = 8.0
+TIMEOUT_CHAT_LINK_SEC = 60.0
+TIMEOUT_MAP_ICONS_SEC = 60.0
 TIMEOUT_TOKEN_SEC = 800.0
-TIMEOUT_CONGR_SEC = 8.0
+TIMEOUT_CONGR_SEC = 15.0
 
 # =========================
 # UTILS
@@ -119,8 +119,8 @@ class State(Enum):
     IDLE = 0
     GO_CHAT = 1
     WAIT_CHAT_LINK = 2
-    WAIT_MAP_ICONS = 3
-    WAIT_HELI_DISAPPEAR = 4
+    VERIFY_LINK_TAP = 3
+    WAIT_MAP_ICONS = 4
     WAIT_TOKEN = 5
     WAIT_CONGR = 6
     DONE = 7
@@ -161,6 +161,11 @@ class TreasureFlowSimplified:
     def _seconds_in_state(self):
         return time.time() - self.state_enter_ts
 
+    def _chat_ui_visible(self, img):
+        roi, _ = crop(img, ROI_CHAT_UI)
+        best, score = match_any(roi, self.t_chat_ui)
+        return (best is not None and score >= THR_CHAT_UI), score
+
     def trigger(self, coords, loc, hw):
         if self.state != State.IDLE:
             return
@@ -181,27 +186,68 @@ class TreasureFlowSimplified:
             return
 
         if self.state == State.GO_CHAT:
+            self.log("[GO_CHAT] entering, about to tap treasure")
             x, y = tap_match(self.start_coords, self.start_loc, self.start_hw)
+            self.log(f"[GO_CHAT] tapped @ {x},{y}")
             self._mark_action()
             self.set_state(State.WAIT_CHAT_LINK)
             return
 
         if self.state == State.WAIT_CHAT_LINK:
-            if self._seconds_from_last_action() < WAIT_CHAT_AFTER_TAP_SEC:
+            dt_action = self._seconds_from_last_action()
+            dt_state = self._seconds_in_state()
+            self.log(f"[WAIT_CHAT_LINK] dt_action={dt_action:.2f} dt_state={dt_state:.2f}")
+        
+            if dt_action < WAIT_CHAT_AFTER_TAP_SEC:
                 return
-
+        
             roi, coords = crop(img, ROI_CHAT)
             best, score = match_any(roi, self.t_chat)
-
+        
+            best_name = best[0] if best else "None"
+            self.log(f"[WAIT_CHAT_LINK] best={best_name} score={score:.6f} thr={THR_CHAT:.6f}")
+        
+            os.makedirs("debug/treasure", exist_ok=True)
+            cv2.imwrite("debug/treasure/wait_chat_link_roi.png", roi)
+        
+            dbg = img.copy()
+            xs, ys, xe, ye = coords
+            cv2.rectangle(dbg, (xs, ys), (xe, ye), (0, 255, 0), 3)
+            cv2.imwrite("debug/treasure/wait_chat_link_full_with_roi.png", dbg)
+        
+            if best:
+                _, loc, size = best
+                roi_dbg = roi.copy()
+                mx, my = loc
+                h, w = size
+                cv2.rectangle(roi_dbg, (mx, my), (mx + w, my + h), (0, 0, 255), 3)
+                cv2.imwrite("debug/treasure/wait_chat_link_best_match.png", roi_dbg)
+        
             if best and score >= THR_CHAT:
                 _, loc, size = best
                 tap_match(coords, loc, size)
                 self._mark_action()
-                self.set_state(State.WAIT_MAP_ICONS)
+                self.set_state(State.VERIFY_LINK_TAP)
                 return
-
+        
             if self._seconds_in_state() > TIMEOUT_CHAT_LINK_SEC:
                 self.set_state(State.DONE)
+            return
+
+        if self.state == State.VERIFY_LINK_TAP:
+            if self._seconds_from_last_action() < WAIT_AFTER_LINK_TAP_SEC:
+                return
+
+            chat_visible, chat_score = self._chat_ui_visible(img)
+
+            if chat_visible:
+                self.log(f"[VERIFY_LINK_TAP] still in chat chat_ui={chat_score:.3f} -> retry")
+                self._mark_action()
+                self.set_state(State.WAIT_CHAT_LINK)
+                return
+
+            self.log(f"[VERIFY_LINK_TAP] left chat chat_ui={chat_score:.3f} -> map")
+            self.set_state(State.WAIT_MAP_ICONS)
             return
 
         if self.state == State.WAIT_MAP_ICONS:
@@ -215,6 +261,7 @@ class TreasureFlowSimplified:
                 return
 
             if self._seconds_in_state() > TIMEOUT_MAP_ICONS_SEC:
+                self.log(f"[WAIT_MAP_ICONS] timeout score={score:.3f}")
                 self.set_state(State.DONE)
             return
 
@@ -234,15 +281,13 @@ class TreasureFlowSimplified:
                 self._mark_action()
                 self.set_state(State.WAIT_CONGR)
                 return
-            else:
-                  # 🔍 debug
-                  self.log(f"[WAIT_TOKEN] token_score={score:.3f} time={self._seconds_in_state():.2f}")
-                  # 📸 salva screenshot (sempre stesso file)
-                  import os
-                  os.makedirs("debug/treasure", exist_ok=True)
-                  cv2.imwrite("debug/treasure/wait_token.png", img)
+
+            # debug screenshot
+            os.makedirs("debug/treasure", exist_ok=True)
+            cv2.imwrite("debug/treasure/wait_token.png", img)
 
             if self._seconds_in_state() > TIMEOUT_TOKEN_SEC:
+                self.log("[WAIT_TOKEN] timeout")
                 self.set_state(State.DONE)
             return
 

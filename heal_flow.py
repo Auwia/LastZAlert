@@ -3,14 +3,10 @@
 
 import time
 from enum import Enum
+import subprocess
 
 from workflow_manager import Workflow, WORKFLOW_MANAGER
 from bot_utils import crop_roi, load_templates, match_any, adb_tap
-import subprocess
-
-# ============================================================
-# CONFIG
-# ============================================================
 
 ADB_CMD = "adb"
 
@@ -20,26 +16,14 @@ THR_HOSPITAL = 0.85
 ACTION_COOLDOWN_SEC = 1.0
 STALL_TIMEOUT_SEC = 90
 
-# ROI (usa le stesse che hai nel main)
 HOSPITAL_BANNER_ROI = (0.0, 1.0, 0.0, 0.22)
 FIRST_ROW_LABEL_ROI = (0.78, 0.93, 0.33, 0.42)
-FIRST_ROW_LABEL_XY = (1420, 820) 
 
-# coordinate FISSE 
-HOSPITAL_ICON_XY = (960, 1080) 
 HEAL_BUTTON_XY = (900, 2120)
-FIRST_ROW_LABEL_ROI = (0.78, 0.93, 0.33, 0.42)
 HEAL_BATCH = 40
 
-# ============================================================
-# ADB HELPERS (STILE VECCHIO – GLOBALI)
-# ============================================================
+
 def crop_roi_local(img, roi_frac):
-    """
-    Replica ESATTA di crop_roi del vecchio heal.py
-    roi_frac = (x1, x2, y1, y2) frazioni schermo
-    Ritorna: roi_img, (xs, ys, xe, ye)
-    """
     h, w = img.shape[:2]
     x1, x2, y1, y2 = roi_frac
 
@@ -54,6 +38,7 @@ def crop_roi_local(img, roi_frac):
     ye = max(ys + 1, min(ye, h))
 
     return img[ys:ye, xs:xe], (xs, ys, xe, ye)
+
 
 def adb_input_text(txt: str):
     safe = txt.replace(" ", "%s")
@@ -71,9 +56,7 @@ def adb_keyevent(code: int):
         stderr=subprocess.DEVNULL
     )
 
-# ============================================================
-# STATE
-# ============================================================
+
 class HealState(Enum):
     IDLE = 0
     OPEN_HOSPITAL = 1
@@ -81,9 +64,6 @@ class HealState(Enum):
     SET_BATCH = 3
     TAP_HEAL = 4
 
-# ============================================================
-# HEAL FLOW (DONATION STYLE)
-# ============================================================
 
 class HealFlow:
     def __init__(self, log_fn):
@@ -92,17 +72,15 @@ class HealFlow:
         self.state = HealState.IDLE
         self.last_action_ts = 0.0
         self.last_progress_ts = 0.0
+
         self.batch_set = False
         self.heal_icon_xy = None
 
         self.templates = {
             "hospital": load_templates("hospital"),
-            "heal_icon": load_templates("heal"),
         }
 
         self.log("[HEAL-FLOW] inizializzato")
-
-    # --------------------------------------------------------
 
     def _cooldown_ok(self):
         return (time.time() - self.last_action_ts) >= ACTION_COOLDOWN_SEC
@@ -110,22 +88,37 @@ class HealFlow:
     def _mark_action(self):
         self.last_action_ts = time.time()
 
-    # --------------------------------------------------------
-    def trigger(self):
-        if self.state != HealState.IDLE:
-            return
-        if not WORKFLOW_MANAGER.can_run(Workflow.HEAL):
-            return
-        if not WORKFLOW_MANAGER.acquire(Workflow.HEAL):
-            return
+    def _release_and_reset(self, reason=None):
+        if reason:
+            self.log(reason)
 
+        self.state = HealState.IDLE
+        self.heal_icon_xy = None
+        WORKFLOW_MANAGER.release(Workflow.HEAL)
+        self._mark_action()
+
+    def trigger(self, heal_icon_xy):
+        if self.state != HealState.IDLE:
+            return False
+
+        if heal_icon_xy is None:
+            return False
+
+        if not WORKFLOW_MANAGER.can_run(Workflow.HEAL):
+            return False
+
+        if not WORKFLOW_MANAGER.acquire(Workflow.HEAL):
+            return False
+
+        self.heal_icon_xy = heal_icon_xy
         self.state = HealState.OPEN_HOSPITAL
         self.last_action_ts = time.time()
         self.last_progress_ts = time.time()
-        if DEBUG:
-            self.log("[HEAL-FLOW] trigger -> OPEN_HOSPITAL")
 
-    # --------------------------------------------------------
+        if DEBUG:
+            self.log(f"[HEAL-FLOW] trigger -> OPEN_HOSPITAL @ {heal_icon_xy}")
+
+        return True
 
     def step(self, img):
         if self.state == HealState.IDLE:
@@ -134,85 +127,79 @@ class HealFlow:
         if not self._cooldown_ok():
             return
 
-        # watchdog anti-stallo (copiato da Donation)
         if (time.time() - self.last_progress_ts) > STALL_TIMEOUT_SEC:
-            self.log("[HEAL-FLOW] STALL → reset + release")
-            self.state = HealState.IDLE
-            WORKFLOW_MANAGER.release(Workflow.HEAL)
+            self._release_and_reset("[HEAL-FLOW] STALL → reset + release")
+            return
+
+        # 1) tap su icona heal passata dal MAIN
+        if self.state == HealState.OPEN_HOSPITAL:
+            if self.heal_icon_xy is None:
+                self._release_and_reset("[HEAL-FLOW] nessuna coordinata heal -> abort")
+                return
+
+            adb_tap(*self.heal_icon_xy)
+
+            if DEBUG:
+                self.log(f"[HEAL-FLOW] tap heal icon @ {self.heal_icon_xy}")
+
+            self.state = HealState.WAIT_HOSPITAL_UI
+            self.last_progress_ts = time.time()
             self._mark_action()
             return
 
-        # ----------------------------------------------------
-        # 1) open hospital
-        # ----------------------------------------------------
-        if self.state == HealState.OPEN_HOSPITAL:
-            name, score, loc, hw = match_any(img, self.templates["heal_icon"])
-        
-            if name and score >= 0.80:
-                cx = loc[0] + hw[1] // 2
-                cy = loc[1] + hw[0] // 2
-                self.heal_icon_xy = (cx, cy) 
-                adb_tap(cx, cy)
-                if DEBUG:
-                    self.log(f"[HEAL-FLOW] heal icon tap @ {cx},{cy} score={score:.3f}")
-                self.state = HealState.WAIT_HOSPITAL_UI
-                self.last_progress_ts = time.time()
-                self._mark_action()
-                return
-            else:
-                if DEBUG:
-                    self.log("[HEAL-FLOW] heal icon NOT found → abort")
-                self.state = HealState.IDLE
-                WORKFLOW_MANAGER.release(Workflow.HEAL)
-                self._mark_action()
-                return
-
-        # ----------------------------------------------------
-        # 2) wait hospital UI
-        # ----------------------------------------------------
+        # 2) aspetta UI ospedale
         if self.state == HealState.WAIT_HOSPITAL_UI:
             roi, _ = crop_roi(img, HOSPITAL_BANNER_ROI)
             name, score, *_ = match_any(roi, self.templates["hospital"])
+
             if name and score >= THR_HOSPITAL:
                 if DEBUG:
-                    self.log("[HEAL-FLOW] hospital UI detected")
+                    self.log(f"[HEAL-FLOW] hospital UI detected score={score:.3f}")
+
                 self.state = HealState.SET_BATCH if not self.batch_set else HealState.TAP_HEAL
                 self.last_progress_ts = time.time()
                 self._mark_action()
-                time.sleep(0.8)
+
             return
 
-        # ----------------------------------------------------
-        # 3) set batch (una sola volta)
-        # ----------------------------------------------------
+        # 3) set batch solo la prima volta
         if self.state == HealState.SET_BATCH:
             roi_label, coords = crop_roi_local(img, FIRST_ROW_LABEL_ROI)
             if roi_label is None or roi_label.size == 0:
                 return
-        
+
             xs, ys, xe, ye = coords
-        
             adb_tap((xs + xe) // 2, (ys + ye) // 2)
             time.sleep(0.4)
-        
+
             adb_input_text(str(HEAL_BATCH))
             time.sleep(0.3)
+
             adb_keyevent(66)  # ENTER
-            time.sleep(0.5)
-            adb_tap(900, 2120)
+            time.sleep(0.4)
 
-            self.log(f"[HEAL-FLOW] batch set (ROI) = {HEAL_BATCH}")
-            if self.heal_icon_xy:
-                time.sleep(0.3)
-                adb_tap(*self.heal_icon_xy)
-                time.sleep(0.5)
-                if DEBUG:
-                    self.log(f"[HEAL-FLOW] back tap @ {self.heal_icon_xy}")
+            self.log(f"[HEAL-FLOW] batch impostato = {HEAL_BATCH}")
 
-            self.state = HealState.IDLE
-            self.batch_set = False
-            WORKFLOW_MANAGER.release(Workflow.HEAL)
-            if DEBUG:
-                self.log("[HEAL-FLOW] released.")
+            self.batch_set = True
+            self.state = HealState.TAP_HEAL
+            self.last_progress_ts = time.time()
             self._mark_action()
+
+            return
+
+        # 4) tap bottone Heal
+        if self.state == HealState.TAP_HEAL:
+            adb_tap(*HEAL_BUTTON_XY)
+            self.log("[HEAL-FLOW] tap HEAL")
+
+            time.sleep(1.0)  # aspetta che l'hospital si chiuda da solo
+
+            if self.heal_icon_xy:
+                adb_tap(*self.heal_icon_xy)
+                self.log(f"[HEAL-FLOW] tap HELP/CEROTTO @ {self.heal_icon_xy}")
+                time.sleep(0.2)
+
+            self.last_progress_ts = time.time()
+            self._release_and_reset("[HEAL-FLOW] completed + release")
+
             return
