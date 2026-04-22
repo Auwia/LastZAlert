@@ -1,14 +1,13 @@
 import os
 import time
 import cv2
-import numpy as np
 from enum import Enum
 from datetime import datetime
 import subprocess
 import pytesseract
 
 from workflow_manager import WORKFLOW_MANAGER, Workflow
-from bot_utils import load_templates
+from bot_utils import load_templates, match_any
 
 ADB_CMD = "adb"
 
@@ -29,7 +28,7 @@ CONGR_DIR = os.path.join(BASE_DIR, "congratulations")
 THR_CHAT = 0.70
 THR_CHAT_UI = 0.70
 THR_ICON = 0.70
-THR_TOKEN = 0.72
+THR_TOKEN = 0.81
 THR_CONGR = 0.73
 
 # =========================
@@ -47,10 +46,10 @@ WAIT_AFTER_LINK_TAP_SEC = 1.2
 WAIT_AFTER_ICON_TAP_SEC = 1.0
 WAIT_AFTER_TOKEN_TAP_SEC = 1.0
 
-TIMEOUT_CHAT_LINK_SEC = 60.0
-TIMEOUT_MAP_ICONS_SEC = 60.0
+TIMEOUT_CHAT_LINK_SEC = 80.0
+TIMEOUT_MAP_ICONS_SEC = 80.0
 TIMEOUT_TOKEN_SEC = 800.0
-TIMEOUT_CONGR_SEC = 15.0
+TIMEOUT_CONGR_SEC = 55.0
 
 # =========================
 # UTILS
@@ -69,32 +68,6 @@ def crop(img, roi):
     xs, xe = int(w * x1), int(w * x2)
     ys, ye = int(h * y1), int(h * y2)
     return img[ys:ye, xs:xe], (xs, ys, xe, ye)
-
-def match_any(img, templates):
-    if img is None or len(img.shape) != 3:
-        return None, 0.0
-
-    best_score = 0.0
-    best = None
-    img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    for name, tpl in templates:
-        if tpl is None:
-            continue
-
-        tpl_gray = cv2.cvtColor(tpl, cv2.COLOR_BGR2GRAY) if len(tpl.shape) == 3 else tpl
-
-        if img_gray.shape[0] < tpl_gray.shape[0] or img_gray.shape[1] < tpl_gray.shape[1]:
-            continue
-
-        res = cv2.matchTemplate(img_gray, tpl_gray, cv2.TM_CCOEFF_NORMED)
-        _, score, _, loc = cv2.minMaxLoc(res)
-
-        if score > best_score:
-            best_score = float(score)
-            best = (name, loc, tpl_gray.shape)
-
-    return best, best_score
 
 def tap_match(offset, loc, size):
     xs, ys, _, _ = offset
@@ -163,8 +136,8 @@ class TreasureFlowSimplified:
 
     def _chat_ui_visible(self, img):
         roi, _ = crop(img, ROI_CHAT_UI)
-        best, score = match_any(roi, self.t_chat_ui)
-        return (best is not None and score >= THR_CHAT_UI), score
+        best_name, score, _, _ = match_any(roi, self.t_chat_ui)
+        return (best_name is not None and score >= THR_CHAT_UI), score
 
     def trigger(self, coords, loc, hw):
         if self.state != State.IDLE:
@@ -202,9 +175,8 @@ class TreasureFlowSimplified:
                 return
         
             roi, coords = crop(img, ROI_CHAT)
-            best, score = match_any(roi, self.t_chat)
-        
-            best_name = best[0] if best else "None"
+            best_name, score, loc, size = match_any(roi, self.t_chat)
+    
             self.log(f"[WAIT_CHAT_LINK] best={best_name} score={score:.6f} thr={THR_CHAT:.6f}")
         
             os.makedirs("debug/treasure", exist_ok=True)
@@ -215,16 +187,14 @@ class TreasureFlowSimplified:
             cv2.rectangle(dbg, (xs, ys), (xe, ye), (0, 255, 0), 3)
             cv2.imwrite("debug/treasure/wait_chat_link_full_with_roi.png", dbg)
         
-            if best:
-                _, loc, size = best
+            if best_name is not None:
                 roi_dbg = roi.copy()
                 mx, my = loc
                 h, w = size
                 cv2.rectangle(roi_dbg, (mx, my), (mx + w, my + h), (0, 0, 255), 3)
                 cv2.imwrite("debug/treasure/wait_chat_link_best_match.png", roi_dbg)
         
-            if best and score >= THR_CHAT:
-                _, loc, size = best
+            if best_name is not None and score >= THR_CHAT:
                 tap_match(coords, loc, size)
                 self._mark_action()
                 self.set_state(State.VERIFY_LINK_TAP)
@@ -251,10 +221,9 @@ class TreasureFlowSimplified:
             return
 
         if self.state == State.WAIT_MAP_ICONS:
-            best, score = match_any(img, self.t_icons)
+            best_name, score, loc, size = match_any(img, self.t_icons)
 
-            if best and score >= THR_ICON:
-                _, loc, size = best
+            if best_name is not None and score >= THR_ICON:
                 tap_match((0, 0, img.shape[1], img.shape[0]), loc, size)
                 self._mark_action()
                 self.set_state(State.WAIT_TOKEN)
@@ -266,35 +235,33 @@ class TreasureFlowSimplified:
             return
 
         if self.state == State.WAIT_TOKEN:
-            best, score = match_any(img, self.t_token)
-            heli_best, heli_score = match_any(img, self.t_icons)
-
+            token_name, score, loc, size = match_any(img, self.t_token)
+            heli_name, heli_score, _, _ = match_any(img, self.t_icons)
+        
             self.log(f"[WAIT_TOKEN] heli={heli_score:.3f} token_score={score:.3f} time={self._seconds_in_state():.2f}")
-
-            # se elicottero visibile → reset timer 
-            if heli_best and heli_score >= THR_ICON:
+        
+            # se elicottero visibile → reset timer
+            if heli_name is not None and heli_score >= THR_ICON:
                 self.state_enter_ts = time.time()
-
-            if best and score >= THR_TOKEN:
-                _, loc, size = best
+        
+            if token_name is not None and score >= THR_TOKEN:
                 tap_match((0, 0, img.shape[1], img.shape[0]), loc, size)
                 self._mark_action()
                 self.set_state(State.WAIT_CONGR)
                 return
-
-            # debug screenshot
+        
             os.makedirs("debug/treasure", exist_ok=True)
             cv2.imwrite("debug/treasure/wait_token.png", img)
-
+        
             if self._seconds_in_state() > TIMEOUT_TOKEN_SEC:
                 self.log("[WAIT_TOKEN] timeout")
                 self.set_state(State.DONE)
             return
 
         if self.state == State.WAIT_CONGR:
-            best, score = match_any(img, self.t_congr)
+            best_name, score, _, _ = match_any(img, self.t_congr)
 
-            if best and score >= THR_CONGR:
+            if best_name is not None and score >= THR_CONGR:
                 txt = ocr_reward(img)
                 self.log(f"REWARD: {txt}")
                 adb_tap(50, 50)
