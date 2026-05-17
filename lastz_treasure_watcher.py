@@ -131,6 +131,9 @@ SCIENCE_ICON_THRESHOLD = 0.80
 CONSTRUCTION_ICON_DIR = "ministry/construction_icon"
 CONSTRUCTION_ICON_THRESHOLD = 0.80
 
+CAPITALCLASH_ICON_DIR = "ministry/capital_clash"
+CAPITALCLASH_ICON_THRESHOLD = 0.80
+
 LEFT_ICON_ROI = (0.00, 0.16, 0.33, 0.82)
 TOP_ICON_ROI = (0.14, 0.55, 0.07, 0.12)
 
@@ -1298,10 +1301,19 @@ def officer_icon_visible(img):
     # LEFT check
     s_nameL,s_scoreL,_,_ = match_any(roi_left, SCIENCE_ICON_TEMPLATES)
     c_nameL,c_scoreL,_,_ = match_any(roi_left, CONSTRUCTION_ICON_TEMPLATES)
+    cc_nameL, cc_scoreL, _, _ = match_any(roi_left, CAPITALCLASH_ICON_TEMPLATES)
 
     # TOP check (multiscale)
     s_nameT,s_scoreT,_,_,_ = match_any_multiscale(roi_top, SCIENCE_ICON_TEMPLATES)
     c_nameT,c_scoreT,_,_,_ = match_any_multiscale(roi_top, CONSTRUCTION_ICON_TEMPLATES)
+
+    if not DEBUG_EVENTS_ONLY:
+        log_event(
+            f"[MINISTRY BLOCKER] "
+            f"science L={s_scoreL:.3f} T={s_scoreT:.3f} | "
+            f"construction L={c_scoreL:.3f} T={c_scoreT:.3f} | "
+            f"capitalclash L={cc_scoreL:.3f} T={cc_scoreT:.3f}"
+        )
 
     left_visible = (
         s_scoreL >= SCIENCE_ICON_THRESHOLD or
@@ -1323,11 +1335,12 @@ def log(msg):
     print(msg)
 
 def main():
-    global SCIENCE_ICON_TEMPLATES, CONSTRUCTION_ICON_TEMPLATES, HEAL_ICON_TEMPLATES
+    global SCIENCE_ICON_TEMPLATES, CONSTRUCTION_ICON_TEMPLATES, HEAL_ICON_TEMPLATES, CAPITALCLASH_ICON_TEMPLATES
 
     SCIENCE_ICON_TEMPLATES = load_templates_from_dir(SCIENCE_ICON_DIR)
     CONSTRUCTION_ICON_TEMPLATES = load_templates_from_dir(CONSTRUCTION_ICON_DIR)
     HEAL_ICON_TEMPLATES = load_templates_from_dir(TEMPLATES_HEAL_DIR)
+    CAPITALCLASH_ICON_TEMPLATES = load_templates_from_dir(CAPITALCLASH_ICON_DIR)
 
     print("=== Last Z Bot (Treasure + Heal, threaded) ===")
 
