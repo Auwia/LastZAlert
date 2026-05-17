@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import time
+import os
 from enum import Enum
 import subprocess
 
@@ -20,8 +21,8 @@ HOSPITAL_BANNER_ROI = (0.0, 1.0, 0.0, 0.22)
 FIRST_ROW_LABEL_ROI = (0.78, 0.93, 0.33, 0.42)
 
 HEAL_BUTTON_XY = (900, 2120)
-HEAL_BATCH = 40
-
+DEFAULT_HEAL_BATCH = 50
+HEAL_BATCH_FILE = "heal_batch.txt"
 
 def crop_roi_local(img, roi_frac):
     h, w = img.shape[:2]
@@ -73,8 +74,13 @@ class HealFlow:
         self.last_action_ts = 0.0
         self.last_progress_ts = 0.0
 
-        self.batch_set = False
         self.heal_icon_xy = None
+        
+        self.heal_batch = DEFAULT_HEAL_BATCH
+        self.heal_batch_mtime = None
+        self.last_applied_batch = None
+        
+        self._load_heal_batch(force=True)
 
         self.templates = {
             "hospital": load_templates("hospital"),
@@ -87,6 +93,43 @@ class HealFlow:
 
     def _mark_action(self):
         self.last_action_ts = time.time()
+
+    def _load_heal_batch(self, force=False) -> int:
+        """
+        Legge il batch da HEAL_BATCH_FILE.
+        Il file può essere modificato mentre il programma gira.
+        Se il file non esiste, viene creato con DEFAULT_HEAL_BATCH.
+        Se il valore è invalido, mantiene l'ultimo valore valido.
+        """
+        try:
+            if not os.path.exists(HEAL_BATCH_FILE):
+                with open(HEAL_BATCH_FILE, "w", encoding="utf-8") as f:
+                    f.write(str(DEFAULT_HEAL_BATCH))
+
+            mtime = os.path.getmtime(HEAL_BATCH_FILE)
+
+            if not force and self.heal_batch_mtime == mtime:
+                return self.heal_batch
+
+            with open(HEAL_BATCH_FILE, "r", encoding="utf-8") as f:
+                raw = f.read().strip()
+
+            value = int(raw)
+
+            if value <= 0:
+                raise ValueError("batch deve essere > 0")
+
+            old = self.heal_batch
+            self.heal_batch = value
+            self.heal_batch_mtime = mtime
+
+            if old != value:
+                self.log(f"[HEAL-FLOW] batch aggiornato da file: {old} -> {value}")
+
+        except Exception as e:
+            self.log(f"[HEAL-FLOW] batch file invalido, tengo {self.heal_batch}: {e}")
+
+        return self.heal_batch
 
     def _release_and_reset(self, reason=None):
         if reason:
@@ -156,10 +199,15 @@ class HealFlow:
                 if DEBUG:
                     self.log(f"[HEAL-FLOW] hospital UI detected score={score:.3f}")
 
-                self.state = HealState.SET_BATCH if not self.batch_set else HealState.TAP_HEAL
+                batch = self._load_heal_batch()
+                    
+                if self.last_applied_batch != batch:
+                    self.state = HealState.SET_BATCH
+                else:
+                    self.state = HealState.TAP_HEAL
+
                 self.last_progress_ts = time.time()
                 self._mark_action()
-
             return
 
         # 3) set batch solo la prima volta
@@ -172,15 +220,16 @@ class HealFlow:
             adb_tap((xs + xe) // 2, (ys + ye) // 2)
             time.sleep(0.4)
 
-            adb_input_text(str(HEAL_BATCH))
+            batch = self._load_heal_batch(force=True)
+            adb_input_text(str(batch))
             time.sleep(0.3)
 
             adb_keyevent(66)  # ENTER
             time.sleep(0.4)
 
-            self.log(f"[HEAL-FLOW] batch impostato = {HEAL_BATCH}")
+            self.log(f"[HEAL-FLOW] batch impostato = {batch}")
 
-            self.batch_set = True
+            self.last_applied_batch = batch
             self.state = HealState.TAP_HEAL
             self.last_progress_ts = time.time()
             self._mark_action()
