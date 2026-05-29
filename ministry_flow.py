@@ -45,6 +45,35 @@ BOTTOM_LEFT = (100, 2400)
 BOTTOM_LEFT_PIXEL = (80, 2200)
 BOTTOM_RIGHT = (1000, 2400)
 
+USE_FIXED_MINISTRY_TAPS = True
+TAP_CONSTRUCTION_FRAC = (0.50, 0.72)
+TAP_SCIENCE_FRAC      = (0.17, 0.84)
+
+FLOW_WATCHDOG_SEC = 360
+
+USE_FIXED_NAV_TAPS = True
+USE_FIXED_APPLY_TAPS = True
+
+USE_FIXED_SEARCH_TAP = False
+TAP_SEARCH_TIMEOUT_SEC = 10
+
+# schermata mappa / ricerca capitale
+TAP_SEARCH_FRAC      = (0.86, 0.17)   # lente blu a destra
+TAP_SPECIAL_FRAC     = (0.26, 0.095)  # tab Special
+TAP_GO_CAPITAL_FRAC  = (0.835, 0.20)  # primo GO della Capital
+
+# popup capitale
+TAP_PRES_PALACE_FRAC = (0.615, 0.695) # Presidential Palace
+
+# schermata President
+TAP_POSITION_FRAC    = (0.18, 0.80)   # Position Appointment
+
+# popup officer
+TAP_APPLY_FRAC       = (0.50, 0.81)   # bottone Apply
+
+CAPITAL_LOAD_SLEEP_SEC = 4.0
+PALACE_POPUP_SLEEP_SEC = 2.0
+
 # ============================================================
 # OCR
 # ============================================================
@@ -261,11 +290,49 @@ class MinistryState(Enum):
     READ_APPLICATION_NOTE = 23
     EXIT_MINISTRY = 24
 
+STATE_TIMEOUTS = {
+    MinistryState.TAP_MAP: 10,
+    MinistryState.TAP_SPECIAL: 15,
+    MinistryState.TAP_GO: 15,
+    MinistryState.TAP_PALACE: 45,
+    MinistryState.TAP_POSITION: 45,
+    MinistryState.READ_X: 100,
+    MinistryState.TAP_SCIENCE: 30,
+    MinistryState.READ_Y: 45,
+    MinistryState.APPLY_SCIENCE: 30,
+    MinistryState.APPLY_CONSTRUCTION_DONE: 30,
+    MinistryState.CONFIRM: 30,
+    MinistryState.BACK_TO_HQ: 45,
+}
+
 # ============================================================
 # MINISTRY FLOW
 # ============================================================
 
 class MinistryFlow:
+    def _tap_fixed_frac(self, img, frac, label, next_state=None, sleep_sec=0.4):
+        """
+        Tap fisso ma scalato sulla risoluzione dello screenshot corrente.
+        Così non dipende da 918x2048 / 1080x2408 ecc.
+        """
+        if img is None or img.size == 0:
+            return False
+
+        h, w = img.shape[:2]
+        x = int(w * frac[0])
+        y = int(h * frac[1])
+
+        adb_tap(x, y)
+        time.sleep(sleep_sec)
+
+        self.log(f"[MINISTRY] tap fixed {label} @ {x},{y}")
+
+        if next_state:
+            self.state = next_state
+
+        self._mark_action()
+        return True
+
     def _schedule_confirm_popup_cleanup(self, delay_sec: int):
         import threading
     
@@ -333,6 +400,17 @@ class MinistryFlow:
         return False
 
     def _precheck_exit(self, img) -> bool:
+        c_name, c_score, _, _ = match_any(img, self.templates["construction_icon"])
+        s_name, s_score, _, _ = match_any(img, self.templates["science_icon"])
+        n_name, n_score, _, _ = match_any(img, self.templates["nickname"])
+
+        self.log(
+            f"[MINISTRY][OFFICER-CHECK] "
+            f"construction={c_name}:{c_score:.3f} "
+            f"science={s_name}:{s_score:.3f} "
+            f"nickname={n_name}:{n_score:.3f}"
+        )
+
         if self._construction_icon_present(img): 
             self.log("[MINISTRY] precheck: already construction officer")
             return True
@@ -436,7 +514,8 @@ class MinistryFlow:
         mask = cv2.inRange(hsv, lower, upper)
         ratio = cv2.countNonZero(mask) / mask.size
     
-        return ratio > 0.03
+        self.log(f"[MINISTRY][ALREADY-APPLIED] green_ratio={ratio:.4f}")
+        return ratio > 0.10
 
     def __init__(self, log_fn=print, screenshot_ctx=None):
         self.log = log_fn
@@ -456,6 +535,69 @@ class MinistryFlow:
 
     def _mark_action(self):
         self.last_action_ts = time.time()
+
+    def _abort_ministry_flow(self, img=None, reason="unknown"):
+        self.log(f"[MINISTRY][ABORT] reason={reason} state={self.state.name}")
+
+        self.xy_read = False
+        self.returning_to_construction = False
+        self.x = 0
+        self.y = 0
+
+        self.state = MinistryState.IDLE
+        WORKFLOW_MANAGER.release(Workflow.MINISTRY)
+
+        if hasattr(self, "started_ts"):
+            del self.started_ts
+
+        # prova a uscire da schermate/eventi/popup
+        adb_keyevent(4)
+        time.sleep(0.3)
+        adb_keyevent(4)
+        time.sleep(0.3)
+
+        # se per caso siamo in world map e c'è HQ, prova a tornare HQ
+        if img is not None:
+            self._tap_template(img, "go_hq")
+
+    def _state_timeout_reached(self) -> bool:
+        timeout = STATE_TIMEOUTS.get(self.state)
+        if timeout is None:
+            return False
+
+        elapsed = time.time() - self.last_action_ts
+        return elapsed > timeout
+
+    def _abort_flow_timeout(self, img=None):
+        elapsed = time.time() - self.last_action_ts
+
+        self.log(
+            f"[MINISTRY][STATE-TIMEOUT] state={self.state.name} "
+            f"elapsed={elapsed:.1f}s → abort flow"
+        )
+
+        self.xy_read = False
+        self.returning_to_construction = False
+        self.x = 0
+        self.y = 0
+
+        self.state = MinistryState.IDLE
+        WORKFLOW_MANAGER.release(Workflow.MINISTRY)
+
+        if hasattr(self, "started_ts"):
+            del self.started_ts
+
+        # pulizia schermata
+        adb_keyevent(4)
+        time.sleep(0.3)
+        adb_keyevent(4)
+        time.sleep(0.3)
+        adb_keyevent(4)
+        time.sleep(0.3)
+
+        # se per caso vede il bottone HQ, lo tappa
+        if img is not None:
+            self._tap_template(img, "go_hq")
 
     def trigger(self):
         if self.state != MinistryState.IDLE:
@@ -478,7 +620,7 @@ class MinistryFlow:
         if (
             self.state not in (MinistryState.IDLE, MinistryState.DONE)
             and hasattr(self, "started_ts")
-            and time.time() - self.started_ts > 220
+            and time.time() - self.started_ts > FLOW_WATCHDOG_SEC
         ):
             self.log(f"[MINISTRY][WATCHDOG] timeout in state={self.state.name}")
             self.xy_read = False
@@ -497,7 +639,12 @@ class MinistryFlow:
 
         if self.state == MinistryState.DONE:
             return
+
         if self.state == MinistryState.IDLE or not self._cooldown_ok():
+            return
+
+        if self.state != MinistryState.TAP_SEARCH and self._state_timeout_reached():
+            self._abort_flow_timeout(img)
             return
 
         def tap_and_next(x, y, next_state):
@@ -509,7 +656,8 @@ class MinistryFlow:
         # --- Step machine below ---
         if self.state == MinistryState.TAP_MAP:
             name, score, loc, hw = match_any(img, self.templates["map"])
-            self.log(f"[MINISTRY] TAP_MAP match={name} score={score:.3f}")
+            elapsed = time.time() - self.last_action_ts
+            self.log(f"[MINISTRY] TAP_MAP match={name} score={score:.3f} elapsed={elapsed:.1f}s")
         
             if name and score >= THR:
                 adb_tap(loc[0] + hw[1] // 2, loc[1] + hw[0] // 2)
@@ -520,25 +668,93 @@ class MinistryFlow:
             return
 
         if self.state == MinistryState.TAP_SEARCH:
-            if self._tap_template(img, "search", MinistryState.TAP_SPECIAL):
+            elapsed = time.time() - self.last_action_ts
+
+            # La lente NON deve essere fixed: serve anche come verifica schermata.
+            name, score, loc, hw = match_any(img, self.templates["search"])
+            self.log(
+                f"[MINISTRY] TAP_SEARCH match={name} "
+                f"score={score:.3f} elapsed={elapsed:.1f}s"
+            )
+
+            if name and score >= 0.80:
+                cx = loc[0] + hw[1] // 2
+                cy = loc[1] + hw[0] // 2
+                adb_tap(cx, cy)
+                time.sleep(0.8)
+                self.log(f"[MINISTRY] tap search score={score:.3f} @ {cx},{cy}")
+                self.state = MinistryState.TAP_SPECIAL
+                self._mark_action()
                 return
 
+            if elapsed > TAP_SEARCH_TIMEOUT_SEC:
+                self._abort_ministry_flow(img, reason="search_icon_not_found")
+                return
+
+            return
+
         if self.state == MinistryState.TAP_SPECIAL:
+            if USE_FIXED_NAV_TAPS:
+                self._tap_fixed_frac(
+                    img,
+                    TAP_SPECIAL_FRAC,
+                    "special",
+                    MinistryState.TAP_GO,
+                    sleep_sec=0.8
+                )
+                return
+
             if self._tap_template(img, "special", MinistryState.TAP_GO):
                 return
 
         if self.state == MinistryState.TAP_GO:
+            if USE_FIXED_NAV_TAPS:
+                self._tap_fixed_frac(
+                    img,
+                    TAP_GO_CAPITAL_FRAC,
+                    "go_capital",
+                    MinistryState.TAP_CENTER,
+                    sleep_sec=CAPITAL_LOAD_SLEEP_SEC
+                )
+                return
+
             if self._tap_template(img, "go_capital", MinistryState.TAP_CENTER):
+                time.sleep(CAPITAL_LOAD_SLEEP_SEC)
                 return
 
         if self.state == MinistryState.TAP_CENTER:
-            tap_and_next(*CENTER_SCREEN, MinistryState.TAP_PALACE)
+            adb_tap(*CENTER_SCREEN)
+            self.log(f"[MINISTRY] tap center @ {CENTER_SCREEN[0]},{CENTER_SCREEN[1]} → wait palace popup")
+            time.sleep(PALACE_POPUP_SLEEP_SEC)
+            self.state = MinistryState.TAP_PALACE
+            self._mark_action()
+            return
 
         if self.state == MinistryState.TAP_PALACE:
+            if USE_FIXED_NAV_TAPS:
+                self._tap_fixed_frac(
+                    img,
+                    TAP_PRES_PALACE_FRAC,
+                    "pres_palace",
+                    MinistryState.TAP_POSITION,
+                    sleep_sec=2.0
+                )
+                return
+
             if self._tap_template(img, "pres_palace", MinistryState.TAP_POSITION):
                 return
 
         if self.state == MinistryState.TAP_POSITION:
+            if USE_FIXED_NAV_TAPS:
+                self._tap_fixed_frac(
+                    img,
+                    TAP_POSITION_FRAC,
+                    "position",
+                    MinistryState.TAP_CONSTRUCTION,
+                    sleep_sec=1.0
+                )
+                return
+
             if self._tap_template(img, "position", MinistryState.TAP_CONSTRUCTION):
                 return
 
@@ -548,6 +764,16 @@ class MinistryFlow:
                 if self.returning_to_construction
                 else MinistryState.READ_X
             )
+
+            if USE_FIXED_MINISTRY_TAPS:
+                self._tap_fixed_frac(
+                    img,
+                    TAP_CONSTRUCTION_FRAC,
+                    "secretary_construction",
+                    next_state
+                )
+                return
+
             if self._tap_template(img, "sec_constr", next_state):
                 return
 
@@ -601,8 +827,10 @@ class MinistryFlow:
 
         if self.state == MinistryState.BACK_FROM_X:
             adb_tap(*BOTTOM_LEFT)
-            time.sleep(0.2)
-            self.state = MinistryState.SCROLL_UP
+            time.sleep(0.4)
+
+            # niente scroll: science è già visibile in basso a sinistra
+            self.state = MinistryState.TAP_SCIENCE
             self._mark_action()
             return
 
@@ -615,6 +843,15 @@ class MinistryFlow:
             return
 
         if self.state == MinistryState.TAP_SCIENCE:
+            if USE_FIXED_MINISTRY_TAPS:
+                self._tap_fixed_frac(
+                    img,
+                    TAP_SCIENCE_FRAC,
+                    "secretary_science",
+                    MinistryState.READ_Y
+                )
+                return
+
             if self._tap_template(img, "sec_science", MinistryState.READ_Y):
                 return
 
@@ -674,6 +911,16 @@ class MinistryFlow:
         # APPLY SCIENCE
         # -------------------------
         if self.state == MinistryState.APPLY_SCIENCE:
+            if USE_FIXED_APPLY_TAPS:
+                self._tap_fixed_frac(
+                    img,
+                    TAP_APPLY_FRAC,
+                    "apply_science",
+                    MinistryState.CONFIRM,
+                    sleep_sec=0.8
+                )
+                return
+
             if self._tap_template(img, "apply", score_thr=0.6):
                 self.state = MinistryState.CONFIRM
                 self._mark_action()
@@ -717,6 +964,16 @@ class MinistryFlow:
                 return
         
             # 4. solo ora cerco Apply
+            if USE_FIXED_APPLY_TAPS:
+                self._tap_fixed_frac(
+                    img,
+                    TAP_APPLY_FRAC,
+                    "apply_construction",
+                    MinistryState.CONFIRM,
+                    sleep_sec=0.8
+                )
+                return
+
             if self._tap_template(img, "apply", score_thr=0.6):
                 self.state = MinistryState.CONFIRM
                 self._mark_action()
@@ -740,7 +997,10 @@ class MinistryFlow:
         
             # caso 3: compare davvero il bottone Confirm
             if self._tap_template(img, "confirm", MinistryState.READ_APPLICATION_NOTE):
-                time.sleep(0.4)
+                # siamo arrivati alla fase finale: non voglio che il watchdog globale
+                # scatti prima dell'OCR della application note
+                self.started_ts = time.time()
+                time.sleep(1.8)
                 return
         
             # altrimenti: aspetta frame successivo (NO timeout qui)
@@ -782,7 +1042,7 @@ class MinistryFlow:
             if delay > 0:
                 self._schedule_confirm_popup_cleanup(delay)
         
-            self.log(f"[MINISTRY] ministry finished, cooldown ignored")
+            self.log("[MINISTRY] ministry finished → exiting")
             self.state = MinistryState.EXIT_MINISTRY
             return
 

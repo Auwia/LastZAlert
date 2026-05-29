@@ -36,7 +36,7 @@ ENABLE_TREASURE_FLOW_SIMPLIFIED = True
 
 ENABLE_MINISTRY_FLOW = True
 
-ENABLE_RALLY_FLOW = True
+ENABLE_RALLY_FLOW = False
 RALLY_DEBUG = True
 DEBUG_RALLY_DIR = "debug/rally"
 os.makedirs(DEBUG_RALLY_DIR, exist_ok=True)
@@ -125,14 +125,16 @@ REC_LOCK = threading.Lock()
 
 TREASURE_FLOW_EVENT = threading.Event()
 
+# MINISTRY CONF.
 SCIENCE_ICON_DIR = "ministry/science_icon"
 SCIENCE_ICON_THRESHOLD = 0.80
-
 CONSTRUCTION_ICON_DIR = "ministry/construction_icon"
 CONSTRUCTION_ICON_THRESHOLD = 0.80
-
 CAPITALCLASH_ICON_DIR = "ministry/capital_clash"
 CAPITALCLASH_ICON_THRESHOLD = 0.80
+HQ_VIEW_DIR = "ministry/hq_view"
+HQ_VIEW_ROI = (0.72, 1.00, 0.82, 1.00)
+HQ_VIEW_THRESHOLD = 0.80
 
 LEFT_ICON_ROI = (0.00, 0.16, 0.33, 0.82)
 TOP_ICON_ROI = (0.14, 0.55, 0.07, 0.12)
@@ -162,6 +164,16 @@ ALLIANCE_ICON_ROI   = (0.85, 0.98, 0.75, 0.95)
 ALLIANCE_TECH_ROI = (0.05, 0.95, 0.25, 0.60)
 RECOMMENDED_ROI    = (0.25, 0.75, 0.20, 0.55)
 DONATE_BUTTON_ROI  = (0.20, 0.80, 0.70, 0.90)
+
+RESEARCH_MAIN_COOLDOWN_SEC = 120
+_last_research_main_trigger = 0.0
+
+PERF_LOG_SEC = 60
+_perf_last_log = time.time()
+_perf_bg_screencap = 0
+_perf_forced_screencap = 0
+_perf_main_loops = 0
+_perf_tick_stats = {}
 
 # ============================================================
 # Debug
@@ -199,6 +211,48 @@ def reset_adb():
     except Exception as e:
         print("[ADB] reset failed:", e)
 
+def log_tick_stats():
+    if not _perf_tick_stats:
+        return
+
+    parts = []
+
+    for name, st in sorted(
+        _perf_tick_stats.items(),
+        key=lambda kv: kv[1]["total"],
+        reverse=True
+    ):
+        avg = st["total"] / max(1, st["count"])
+        parts.append(
+            f"{name}: count={st['count']} total={st['total']:.1f}s "
+            f"avg={avg:.2f}s max={st['max']:.2f}s"
+        )
+
+    if DEBUG:
+        log_event("[PERF-TICKS] " + " | ".join(parts))
+    _perf_tick_stats.clear()
+
+def timed_tick(name, fn, *args):
+    t0 = time.time()
+    try:
+        return fn(*args)
+    finally:
+        dur = time.time() - t0
+
+        st = _perf_tick_stats.setdefault(name, {
+            "count": 0,
+            "total": 0.0,
+            "max": 0.0,
+        })
+
+        st["count"] += 1
+        st["total"] += dur
+        st["max"] = max(st["max"], dur)
+
+        if dur >= 0.30:
+            if DEBUG:
+                log_event(f"[SLOW-TICK] {name} dur={dur:.2f}s")
+
 def log_event(msg: str):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{ts}] {msg}", flush=True)
@@ -217,7 +271,6 @@ def run_cmd(cmd: List[str], timeout: int = 30) -> Tuple[int, str, str]:
     except subprocess.TimeoutExpired:
         return 1, "", "timeout"
 
-
 def check_adb_device() -> bool:
     code, out, err = run_cmd([ADB_CMD, "devices"])
     if code != 0:
@@ -232,6 +285,8 @@ def check_adb_device() -> bool:
     return True
 
 def wait_new_frame(delay=0.6):
+    global _perf_forced_screencap
+
     """
     Aspetta che il gioco aggiorni lo schermo e forza
     uno screenshot fresco.
@@ -239,6 +294,7 @@ def wait_new_frame(delay=0.6):
     time.sleep(delay)
 
     with SCREENSHOT_LOCK:
+        _perf_forced_screencap += 1
         take_screenshot(SCREENSHOT_PATH)
 
 def take_screenshot(path: str) -> bool:
@@ -261,10 +317,30 @@ def take_screenshot(path: str) -> bool:
         return False
 
 def screenshot_producer(stop_evt: threading.Event):
-    global SCREENSHOT_ERROR_COUNT
+    global SCREENSHOT_ERROR_COUNT, _perf_bg_screencap, _perf_last_log, _perf_forced_screencap, _perf_main_loops
+
     tmp_path = SCREENSHOT_PATH + ".tmp"
 
     while not stop_evt.is_set():
+        _perf_main_loops += 1
+        now_perf = time.time()
+        
+        if DEBUG:
+            if now_perf - _perf_last_log >= PERF_LOG_SEC:
+                log_event(
+                    f"[PERF] "
+                    f"main_loops/min={_perf_main_loops} "
+                    f"bg_screencap/min={_perf_bg_screencap} "
+                    f"forced_screencap/min={_perf_forced_screencap}"
+                )
+
+            log_tick_stats()
+        
+            _perf_last_log = now_perf
+            _perf_main_loops = 0
+            _perf_bg_screencap = 0
+            _perf_forced_screencap = 0
+
         if DEBUG:
             log_event(
                 f"[LOOP] "
@@ -277,26 +353,29 @@ def screenshot_producer(stop_evt: threading.Event):
 
         #print("[SEQUENTIAL] Tick loop in esecuzione...")
         try:
-            with SCREENSHOT_LOCK:
-                proc = subprocess.run(
-                    [ADB_CMD, "exec-out", "screencap", "-p"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=10,          # ⬅ riduci
-                    check=False
-                )
-
-                if proc.returncode != 0 or not proc.stdout:
-                    err = proc.stderr.decode(errors="ignore")
-                    print("[SCREENSHOT] screencap failed:", err)
-                    SCREENSHOT_ERROR_COUNT += 1
-
-                    if "error: closed" in err.lower():
-                        SCREENSHOT_ERROR_COUNT = SCREENSHOT_ERROR_MAX
-                else:
-                    SCREENSHOT_ERROR_COUNT = 0
-                    with open(tmp_path, "wb") as f:
-                        f.write(proc.stdout)
+            _perf_bg_screencap += 1
+            proc = subprocess.run(
+                [ADB_CMD, "exec-out", "screencap", "-p"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+                check=False
+            )
+        
+            if proc.returncode != 0 or not proc.stdout:
+                err = proc.stderr.decode(errors="ignore")
+                print("[SCREENSHOT] screencap failed:", err)
+                SCREENSHOT_ERROR_COUNT += 1
+        
+                if "error: closed" in err.lower():
+                    SCREENSHOT_ERROR_COUNT = SCREENSHOT_ERROR_MAX
+            else:
+                SCREENSHOT_ERROR_COUNT = 0
+        
+                with open(tmp_path, "wb") as f:
+                    f.write(proc.stdout)
+        
+                with SCREENSHOT_LOCK:
                     os.replace(tmp_path, SCREENSHOT_PATH)
 
         except subprocess.TimeoutExpired:
@@ -380,6 +459,56 @@ def load_templates_from_dir(directory: str) -> List[Tuple[str, np.ndarray]]:
         templates.append((name, img))
     log_event(f"[+] Caricati {len(templates)} template da '{directory}'")
     return templates
+
+def match_any_fast_scaled(roi_img, templates, scale=0.5):
+    """
+    Match più veloce:
+    riduce ROI e template, poi riporta loc/hw alle coordinate originali.
+    Utile per popup generici dove non serve precisione pixel-perfect.
+    """
+    if roi_img is None or roi_img.size == 0:
+        return None, 0.0, (0, 0), (0, 0)
+
+    small_roi = cv2.resize(
+        roi_img,
+        None,
+        fx=scale,
+        fy=scale,
+        interpolation=cv2.INTER_AREA
+    )
+
+    scaled_templates = []
+
+    for name, tmpl in templates:
+        th, tw = tmpl.shape[:2]
+        new_w = max(8, int(tw * scale))
+        new_h = max(8, int(th * scale))
+
+        tmpl_s = cv2.resize(
+            tmpl,
+            (new_w, new_h),
+            interpolation=cv2.INTER_AREA
+        )
+
+        scaled_templates.append((name, tmpl_s))
+
+    name, score, loc, hw = match_any(small_roi, scaled_templates)
+
+    if name is None:
+        return None, score, loc, hw
+
+    # torna alle coordinate della ROI originale
+    loc_orig = (
+        int(loc[0] / scale),
+        int(loc[1] / scale)
+    )
+
+    hw_orig = (
+        int(hw[0] / scale),
+        int(hw[1] / scale)
+    )
+
+    return name, score, loc_orig, hw_orig
 
 def match_any_multiscale(roi_img: np.ndarray, templates: List[Tuple[str, np.ndarray]], scales=(0.80,0.90,1.0,1.10,1.20)):
     best_name = None
@@ -951,7 +1080,11 @@ def treasure_watcher_tick(stop_evt):
     except StopIteration:
         del treasure_watcher_tick._gen
 
+_last_treasure_scan_ts = 0.0
+TREASURE_SCAN_INTERVAL_SEC = 1.5
 def treasure_watcher_loop(stop_evt):
+    global _last_treasure_scan_ts
+    
     templates = load_templates_from_dir(TEMPLATES_TREASURES_DIR)
     if not templates:
         return
@@ -960,6 +1093,13 @@ def treasure_watcher_loop(stop_evt):
     hits = 0
 
     while not stop_evt.is_set():
+        now_scan = time.time()
+        if now_scan - _last_treasure_scan_ts < TREASURE_SCAN_INTERVAL_SEC:
+            yield
+            continue
+
+        _last_treasure_scan_ts = now_scan
+
         with SCREENSHOT_LOCK:
             img = load_image(SCREENSHOT_PATH)
 
@@ -1007,7 +1147,6 @@ def treasure_watcher_loop(stop_evt):
             hits = 0
 
         yield
-        time.sleep(CHECK_INTERVAL_SEC)
 
 # 2. HOSPITAL WATCHER
 def hospital_watcher_tick(stop_evt):
@@ -1172,91 +1311,153 @@ _last_generic_fire = 0.0
 
 def simple_event_watcher_tick(stop_evt):
     global _simple_event_templates, _last_fire_simple_event, _last_generic_fire
-
-    if DEBUG:
-        log_event("[SIMPLE EVENTS] tick start")
-
-    if not _simple_event_templates:
-        for name, cfg in SIMPLE_EVENTS.items():
-            templates = load_templates_from_dir(cfg["templates"])
-            if templates:
-                _simple_event_templates[name] = templates
-        _last_fire_simple_event = {name: 0.0 for name in _simple_event_templates}
-
-    now = time.time()
-    if now - _last_generic_fire < 1:
-        return
-
-    if DEBUG:
-        log_event("[SIMPLE EVENTS] try acquire GENERIC")
-
-    if not WORKFLOW_MANAGER.acquire(Workflow.GENERIC):
-        time.sleep(0.05)
-        if DEBUG:
-            log_event("[SIMPLE EVENTS] GENERIC busy")
-        return
-
-    with SCREENSHOT_LOCK:
-        img = load_image(SCREENSHOT_PATH)
-
-    if img is None:
-        WORKFLOW_MANAGER.release(Workflow.GENERIC)
-        return
-
-    did_anything = False
-
     global _last_multi_resource_time
-    
-    for name, templates in _simple_event_templates.items():
 
-        cfg = SIMPLE_EVENTS[name]
-        if now - _last_fire_simple_event[name] < cfg["cooldown"]:
-            continue
+    t0 = time.time()
+    acquired = False
+    result = "unknown"
+    scanned = 0
+    skipped_cd = 0
+    hit = None
 
-        roi_img, roi_coords = crop_roi(img, cfg["roi"])
-        name_t, score, loc, hw = match_any(roi_img, templates)
+    if DEBUG:
+        log_event(
+            f"[SIMPLE EVENTS] START "
+            f"generic={WORKFLOW_MANAGER.is_active(Workflow.GENERIC)} "
+            f"heal={WORKFLOW_MANAGER.is_active(Workflow.HEAL)} "
+            f"research={WORKFLOW_MANAGER.is_active(Workflow.RESEARCH)} "
+            f"ministry={WORKFLOW_MANAGER.is_active(Workflow.MINISTRY)} "
+            f"treasure={WORKFLOW_MANAGER.is_active(Workflow.TREASURE)}"
+        )
 
-        if not DEBUG_EVENTS_ONLY:
-            log_event(f"[{name.upper()}] best={name_t} score={score:.3f} thr={cfg['threshold']:.2f}")
+    try:
+        if not _simple_event_templates:
+            for ev_name, cfg in SIMPLE_EVENTS.items():
+                templates = load_templates_from_dir(cfg["templates"])
+                if templates:
+                    _simple_event_templates[ev_name] = templates
 
-        if score >= cfg["threshold"]:
-            if DEBUG:
-                log_event(f"[EVENT DETECTED] {name}")
+            _last_fire_simple_event = {
+                ev_name: 0.0 for ev_name in _simple_event_templates
+            }
+
+            log_event(
+                f"[SIMPLE EVENTS] templates loaded={len(_simple_event_templates)}"
+            )
+
+        now = time.time()
+
+        if now - _last_generic_fire < 1:
+            result = f"skip_global_cd {now - _last_generic_fire:.2f}s"
+            return
+
+        if not WORKFLOW_MANAGER.acquire(Workflow.GENERIC):
+            result = "acquire_failed_generic_busy"
+            return
+
+        acquired = True
+        result = "acquired"
+
+        with SCREENSHOT_LOCK:
+            img = load_image(SCREENSHOT_PATH)
+
+        if img is None:
+            result = "no_image"
+            return
+
+        for ev_name, templates in _simple_event_templates.items():
+            cfg = SIMPLE_EVENTS[ev_name]
             now = time.time()
-            # VIP6 multi resource logic
-            if ENABLE_MULTI_RESOURCE_COLLECTION and name in RESOURCE_EVENTS:
-                # se abbiamo appena raccolto, skip
-                if now - _last_multi_resource_time < MULTI_RESOURCE_BLOCK_SECONDS:
-                    continue
-        
-                _last_multi_resource_time = now
 
-            if cfg.get("tap") == "OUTSIDE":
-                cx, cy = tap_outside_popup(img)
+            if now - _last_fire_simple_event[ev_name] < cfg["cooldown"]:
+                skipped_cd += 1
+                continue
+
+            scanned += 1
+            ev_t0 = time.time()
+
+            roi_img, roi_coords = crop_roi(img, cfg["roi"])
             
-            elif cfg.get("tap") == "center":
-                cx = img.shape[1] // 2
-                cy = img.shape[0] // 2
-                adb_tap(cx, cy)
-            
-            elif cfg.get("tap") == "bottom_right":
-                cx = int(img.shape[1] * 0.97)
-                cy = int(img.shape[0] * 0.97)
-                adb_tap(cx, cy)
-            
+            if ev_name in ("confirm_popup", "cancel_popup"):
+                name_t, score, loc, hw = match_any_fast_scaled(
+                    roi_img,
+                    templates,
+                    scale=0.35
+                )
             else:
-                cx, cy = tap_match_in_fullscreen(roi_coords, loc, hw)
-        
-            log_event(f"[{name.upper()}] score: {score} threshold: {cfg['threshold']} tap @ {cx},{cy}")
-            _last_fire_simple_event[name] = now
-            _last_generic_fire = now
-            did_anything = True
-            time.sleep(0.2)
+                name_t, score, loc, hw = match_any(roi_img, templates)
 
-    WORKFLOW_MANAGER.release(Workflow.GENERIC)
+            ev_dur = time.time() - ev_t0
+            if ev_dur >= 0.30:
+                log_event(
+                    f"[SIMPLE-EVENTS-SLOW] "
+                    f"event={ev_name} "
+                    f"templates={len(templates)} "
+                    f"dur={ev_dur:.2f}s "
+                    f"best={name_t} score={score:.3f}"
+                )
 
-    if did_anything:
-        time.sleep(0.3)
+            if score >= cfg["threshold"]:
+                hit = ev_name
+
+                if DEBUG:
+                    log_event(
+                        f"[SIMPLE EVENTS] HIT event={ev_name} "
+                        f"template={name_t} score={score:.3f} "
+                        f"thr={cfg['threshold']:.2f}"
+                    )
+
+                if ENABLE_MULTI_RESOURCE_COLLECTION and ev_name in RESOURCE_EVENTS:
+                    if now - _last_multi_resource_time < MULTI_RESOURCE_BLOCK_SECONDS:
+                        result = f"hit_{ev_name}_skip_multi_resource_cd"
+                        continue
+
+                    _last_multi_resource_time = now
+
+                if cfg.get("tap") == "OUTSIDE":
+                    cx, cy = tap_outside_popup(img)
+
+                elif cfg.get("tap") == "center":
+                    cx = img.shape[1] // 2
+                    cy = img.shape[0] // 2
+                    adb_tap(cx, cy)
+
+                elif cfg.get("tap") == "bottom_right":
+                    cx = int(img.shape[1] * 0.97)
+                    cy = int(img.shape[0] * 0.97)
+                    adb_tap(cx, cy)
+
+                else:
+                    cx, cy = tap_match_in_fullscreen(roi_coords, loc, hw)
+
+                log_event(
+                    f"[SIMPLE EVENTS] TAP event={ev_name} @ {cx},{cy}"
+                )
+
+                _last_fire_simple_event[ev_name] = now
+                _last_generic_fire = now
+                result = f"hit_{ev_name}"
+
+                time.sleep(0.2)
+                break
+
+        if hit is None:
+            result = "no_hit"
+
+    finally:
+        if acquired:
+            WORKFLOW_MANAGER.release(Workflow.GENERIC)
+
+        if DEBUG:
+            log_event(
+                f"[SIMPLE EVENTS] END result={result} "
+                f"scanned={scanned} skipped_cd={skipped_cd} "
+                f"released={acquired} "
+                f"dur={time.time() - t0:.2f}s"
+            )
+
+        if hit is not None:
+            time.sleep(0.3)
 
 # 3b. TREASURE FLOW (chat explorer)
 def treasure_flow_watcher_tick():
@@ -1287,6 +1488,18 @@ def ministry_flow_tick():
 
     if img is not None:
         flow.step(img)
+
+def hq_view_visible(img) -> bool:
+    if not HQ_VIEW_TEMPLATES:
+        return False
+
+    roi, _ = crop_roi(img, HQ_VIEW_ROI)
+    name, score, _, _ = match_any(roi, HQ_VIEW_TEMPLATES)
+
+    if not DEBUG_EVENTS_ONLY:
+        log_event(f"[HQ-VIEW] match={name} score={score:.3f}")
+
+    return name is not None and score >= HQ_VIEW_THRESHOLD
 
 def officer_icon_visible(img):
 
@@ -1335,12 +1548,13 @@ def log(msg):
     print(msg)
 
 def main():
-    global SCIENCE_ICON_TEMPLATES, CONSTRUCTION_ICON_TEMPLATES, HEAL_ICON_TEMPLATES, CAPITALCLASH_ICON_TEMPLATES
+    global SCIENCE_ICON_TEMPLATES, CONSTRUCTION_ICON_TEMPLATES, HEAL_ICON_TEMPLATES, CAPITALCLASH_ICON_TEMPLATES, HQ_VIEW_TEMPLATES, _last_research_main_trigger
 
     SCIENCE_ICON_TEMPLATES = load_templates_from_dir(SCIENCE_ICON_DIR)
     CONSTRUCTION_ICON_TEMPLATES = load_templates_from_dir(CONSTRUCTION_ICON_DIR)
     HEAL_ICON_TEMPLATES = load_templates_from_dir(TEMPLATES_HEAL_DIR)
     CAPITALCLASH_ICON_TEMPLATES = load_templates_from_dir(CAPITALCLASH_ICON_DIR)
+    HQ_VIEW_TEMPLATES = load_templates_from_dir(HQ_VIEW_DIR)
 
     print("=== Last Z Bot (Treasure + Heal, threaded) ===")
 
@@ -1397,8 +1611,8 @@ def main():
         try:
             while not stop_evt.is_set():
                # 1. Tesori
-               treasure_watcher_tick(stop_evt)
-               treasure_flow_simplified_tick()
+               timed_tick("TREASURE-WATCHER", treasure_watcher_tick, stop_evt)
+               timed_tick("TREASURE-SIMPLIFIED", treasure_flow_simplified_tick)
                 
                # 2. Heal
                img = load_image(SCREENSHOT_PATH)
@@ -1431,29 +1645,26 @@ def main():
                    heal_flow.step(img)
                 
                # 3. Treasure flow 
-               treasure_flow_watcher_tick()
-                
+               timed_tick("TREASURE-FLOW", treasure_flow_watcher_tick)
+ 
                # 4. HQ gifts
-               hq_upgrade_watcher_tick(stop_evt)
+               timed_tick("HQ-UPGRADE", hq_upgrade_watcher_tick, stop_evt)
 
-               if DEBUG:
-                   log_event(
-                       f"[CHECK SIMPLE EVENTS] "
-                       f"heal={WORKFLOW_MANAGER.is_active(Workflow.HEAL)} "
-                       f"research={WORKFLOW_MANAGER.is_active(Workflow.RESEARCH)}"
-                   )
-               
                # 5. Eventi semplici
                if (
-                   not WORKFLOW_MANAGER.is_active(Workflow.HEAL)
+                   WORKFLOW_MANAGER.can_run(Workflow.GENERIC)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.DONATION)
                    and not WORKFLOW_MANAGER.is_active(Workflow.RESEARCH)
                    and not WORKFLOW_MANAGER.is_active(Workflow.RALLY)
                    and not WORKFLOW_MANAGER.is_active(Workflow.MINISTRY)
                    and not WORKFLOW_MANAGER.is_active(Workflow.TREASURE)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.HEAL)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.FORZIERE)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.HQ)
                ):
                    if DEBUG:
                        log_event("[SIMPLE EVENTS] running")
-                   simple_event_watcher_tick(stop_evt)
+                   timed_tick("SIMPLE-EVENTS", simple_event_watcher_tick, stop_evt)
 
                # 6. Donazioni
                if (
@@ -1462,34 +1673,41 @@ def main():
                    and WORKFLOW_MANAGER.can_run(Workflow.DONATION)
                ):
                    dflow.trigger()
-               donation_flow_tick()
+               timed_tick("DONATION", donation_flow_tick)
 
                # 7. Ministry
                if ENABLE_MINISTRY_FLOW:
-                   if (mflow is not None and mflow.state.name == "IDLE" and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC) and WORKFLOW_MANAGER.can_run(Workflow.MINISTRY) and not WORKFLOW_MANAGER.is_active(Workflow.MINISTRY)):
-                       if time.time() >= mflow.cooldown_until:
-                           # aspetta nuovo frame (evita screenshot donation)
-                           wait_new_frame(0.5)
-
-                           img = load_image(SCREENSHOT_PATH)
-                           if img is not None:
-                               if not WORKFLOW_MANAGER.is_active(Workflow.MINISTRY):
-                                   officer_visible = officer_icon_visible(img)
-                                   if not officer_visible:
-                                       mflow.trigger()
-                                   else:
-                                       if not DEBUG_EVENTS_ONLY:
-                                           log_event("[MINISTRY] skip trigger → officer/apply already present")
-                               else:
-                                   officer_visible = True
-
-                               if not officer_visible and time.time() >= mflow.cooldown_until:
-                                   mflow.trigger()
-                               else:
+                   if (
+                       mflow is not None
+                       and mflow.state.name == "IDLE"
+                       and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
+                       and not WORKFLOW_MANAGER.is_active(Workflow.MINISTRY)
+                       and WORKFLOW_MANAGER.can_run(Workflow.MINISTRY)
+                       and time.time() >= mflow.cooldown_until
+                   ):
+                       # aspetta nuovo frame fresco prima dei controlli
+                       wait_new_frame(0.5)
+               
+                       img = load_image(SCREENSHOT_PATH)
+                       if img is not None:
+                           # 1) Ministry parte SOLO da HQ view
+                           if not hq_view_visible(img):
+                               if not DEBUG_EVENTS_ONLY:
+                                   log_event("[MINISTRY] skip trigger → not HQ view")
+               
+                           else:
+                               # 2) Siamo in HQ view: ora controllo se ho già ministro/applicazione
+                               officer_visible = officer_icon_visible(img)
+               
+                               if officer_visible:
                                    if not DEBUG_EVENTS_ONLY:
-                                       log_event("[MINISTRY] officer icon visibile → skip trigger")
-
-                   ministry_flow_tick()
+                                       log_event("[MINISTRY] skip trigger → officer/application already present")
+                               else:
+                                   # 3) HQ view + nessun ministro visibile + cooldown ok
+                                   mflow.trigger()
+               
+                   # step del flow già attivo
+                   timed_tick("MINISTRY", ministry_flow_tick)
 
                # 8. Forziere
                if (
@@ -1509,12 +1727,14 @@ def main():
                            log_event(f"[FORZIERE-FLOW] trigger visibile score={score:.3f}")
                            fflow.trigger()
                 
-               forziere_flow_tick()
+               timed_tick("FORZIERE", forziere_flow_tick)
 
                # 9. Research
+               now_research = time.time() 
                if (
                    rflow is not None
                    and rflow.state.name == "IDLE"
+                   and now_research - _last_research_main_trigger >= RESEARCH_MAIN_COOLDOWN_SEC
                    and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
                    and not WORKFLOW_MANAGER.is_active(Workflow.RESEARCH)
                    and not WORKFLOW_MANAGER.is_active(Workflow.RALLY)
@@ -1523,9 +1743,10 @@ def main():
                    and not WORKFLOW_MANAGER.is_active(Workflow.HEAL)
                    and WORKFLOW_MANAGER.can_run(Workflow.RESEARCH)
                ):
+                   _last_research_main_trigger = now_research
                    rflow.trigger()
-               
-               research_flow_tick()
+
+               timed_tick("RESEARCH", research_flow_tick)
 
                # 10. Rally Flow
                if ENABLE_RALLY_FLOW:

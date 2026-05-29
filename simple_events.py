@@ -43,7 +43,7 @@ SIMPLE_EVENTS = {
         "templates": "cancel_popup",
         "roi": (0.0, 1.00, 0.0, 1.0),
         "threshold": 0.9,
-        "cooldown": 2,
+        "cooldown": 10,
         "log": "[CANCEL_POPUP]",
     },
     #"electricity": {
