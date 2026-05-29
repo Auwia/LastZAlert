@@ -34,7 +34,8 @@ ROI_ALLIANCE_ICON = (0.85, 0.98, 0.75, 0.95)
 ROI_ALLIANCE_TECH = (0.0, 1.0, 0.0, 1.0)
 ROI_RECOMMENDED   = (0.0, 1.0, 0.0, 1.0)
 ROI_DONATE_BUTTON = (0.20, 0.80, 0.70, 0.90)
-ROI_TECH_BADGE = (0.40, 0.50, 0.585, 0.62)
+#ROI_TECH_BADGE = (0.40, 0.50, 0.585, 0.62)
+ROI_TECH_BADGE = (0.42, 0.52, 0.612, 0.647)
 
 ROI_ATTEMPTS = (0.45, 0.85, 0.62, 0.75)
 ROI_COOLDOWN = (0.20, 0.95, 0.70, 0.92)
@@ -59,7 +60,7 @@ def _ocr_badge_number(img) -> Optional[int]:
     mask = cv2.resize(mask, None, fx=4, fy=4, interpolation=cv2.INTER_NEAREST)
 
     txt = pytesseract.image_to_string(
-        mask, config="--psm 7 -c tessedit_char_whitelist=0123456789"
+        mask, config="--psm 6 -c tessedit_char_whitelist=0123456789"
     ).strip()
     m = re.search(r"\d+", txt)
     return int(m.group(0)) if m else None
@@ -171,7 +172,7 @@ class DonationFlow:
             return
 
         # watchdog: reset SOLO se non c'è progresso per troppo tempo
-        STALL_TIMEOUT_SEC = 120
+        STALL_TIMEOUT_SEC = 20
         if self.state != DonationState.IDLE and (time.time() - self.last_progress_ts) > STALL_TIMEOUT_SEC:
             self.log("[DONATION-FLOW] STALL → reset + release")
             self.state = DonationState.IDLE
@@ -252,12 +253,6 @@ class DonationFlow:
                         wait_seconds = missing * 17 * 60
                     self.next_allowed = time.time() + wait_seconds
                     self.log(f"[DONATION-FLOW] badge attempts={attempts}/20 → next check in {wait_seconds//60} min")
-        
-                    # chiudi UI (stessa tua logica)
-                    cleanup_coords = [(100, 2400)]
-                    for (x, y) in cleanup_coords:
-                        time.sleep(0.4)
-                        adb_tap(x, y)
         
                     self.state = DonationState.IDLE
                     WORKFLOW_MANAGER.release(Workflow.DONATION)
