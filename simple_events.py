@@ -9,7 +9,7 @@ SIMPLE_EVENTS = {
         "templates": "heal_finished",
         "roi": (0.697, 0.937, 0.581, 0.693),
         "threshold": 0.88,
-        "cooldown": 1,
+        "cooldown": 5,
     },
     "colleague": {
         "templates": "colleague",
@@ -21,7 +21,7 @@ SIMPLE_EVENTS = {
         "templates": "heal_help",
         "roi": (0.697, 0.937, 0.581, 0.693),
         "threshold": 0.88,
-        "cooldown": 1,
+        "cooldown": 5,
     },
     "back_home": {
         "templates": "back_home",

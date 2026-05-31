@@ -241,7 +241,7 @@ class HealFlow:
             adb_tap(*HEAL_BUTTON_XY)
             self.log("[HEAL-FLOW] tap HEAL")
 
-            time.sleep(1.0)  # aspetta che l'hospital si chiuda da solo
+            time.sleep(1.8)  # aspetta che l'hospital si chiuda da solo
 
             if self.heal_icon_xy:
                 adb_tap(*self.heal_icon_xy)
