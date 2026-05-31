@@ -116,6 +116,8 @@ SCREENSHOT_PATH = os.path.join(DEBUG_DIR, "screen_treasure.png")
 SCREENSHOT_ERROR_COUNT = 0
 SCREENSHOT_ERROR_MAX = 3
 SCREENSHOT_LOCK = threading.Lock()
+SCREENSHOT_ACTIVE_INTERVAL_SEC = 0.3
+SCREENSHOT_IDLE_INTERVAL_SEC = 1.2
 
 REC_PROCESS = None
 REC_REMOTE_PATH = None
@@ -174,6 +176,9 @@ _perf_bg_screencap = 0
 _perf_forced_screencap = 0
 _perf_main_loops = 0
 _perf_tick_stats = {}
+
+MAIN_LOOP_IDLE_SLEEP_SEC = 0.80
+MAIN_LOOP_ACTIVE_SLEEP_SEC = 0.08
 
 # ============================================================
 # Debug
@@ -391,7 +396,10 @@ def screenshot_producer(stop_evt: threading.Event):
             reset_adb()
             SCREENSHOT_ERROR_COUNT = 0
 
-        time.sleep(CHECK_INTERVAL_SEC)
+        if "any_workflow_active" in globals() and any_workflow_active():
+            time.sleep(SCREENSHOT_ACTIVE_INTERVAL_SEC)
+        else:
+            time.sleep(SCREENSHOT_IDLE_INTERVAL_SEC)
 
 def load_image(path: str):
     img = cv2.imread(path, cv2.IMREAD_COLOR)
@@ -1389,13 +1397,14 @@ def simple_event_watcher_tick(stop_evt):
 
             ev_dur = time.time() - ev_t0
             if ev_dur >= 0.30:
-                log_event(
-                    f"[SIMPLE-EVENTS-SLOW] "
-                    f"event={ev_name} "
-                    f"templates={len(templates)} "
-                    f"dur={ev_dur:.2f}s "
-                    f"best={name_t} score={score:.3f}"
-                )
+                if DEBUG:
+                    log_event(
+                        f"[SIMPLE-EVENTS-SLOW] "
+                        f"event={ev_name} "
+                        f"templates={len(templates)} "
+                        f"dur={ev_dur:.2f}s "
+                        f"best={name_t} score={score:.3f}"
+                    )
 
             if score >= cfg["threshold"]:
                 hit = ev_name
@@ -1500,6 +1509,19 @@ def hq_view_visible(img) -> bool:
         log_event(f"[HQ-VIEW] match={name} score={score:.3f}")
 
     return name is not None and score >= HQ_VIEW_THRESHOLD
+
+def any_workflow_active():
+    return (
+        WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
+        or WORKFLOW_MANAGER.is_active(Workflow.DONATION)
+        or WORKFLOW_MANAGER.is_active(Workflow.RESEARCH)
+        or WORKFLOW_MANAGER.is_active(Workflow.RALLY)
+        or WORKFLOW_MANAGER.is_active(Workflow.MINISTRY)
+        or WORKFLOW_MANAGER.is_active(Workflow.TREASURE)
+        or WORKFLOW_MANAGER.is_active(Workflow.HEAL)
+        or WORKFLOW_MANAGER.is_active(Workflow.FORZIERE)
+        or WORKFLOW_MANAGER.is_active(Workflow.HQ)
+    )
 
 def officer_icon_visible(img):
 
@@ -1770,7 +1792,10 @@ def main():
                    continue
    
                # Dopo ogni ciclo, puoi dormire un attimo
-               time.sleep(0.1)
+               if any_workflow_active():
+                   time.sleep(MAIN_LOOP_ACTIVE_SLEEP_SEC)
+               else:
+                   time.sleep(MAIN_LOOP_IDLE_SLEEP_SEC)
     
         except KeyboardInterrupt:
             print("\n[!] Stop richiesto.")

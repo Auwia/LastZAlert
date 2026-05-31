@@ -514,7 +514,8 @@ class MinistryFlow:
         mask = cv2.inRange(hsv, lower, upper)
         ratio = cv2.countNonZero(mask) / mask.size
     
-        self.log(f"[MINISTRY][ALREADY-APPLIED] green_ratio={ratio:.4f}")
+        if DEBUG:
+            self.log(f"[MINISTRY][ALREADY-APPLIED] green_ratio={ratio:.4f}")
         return ratio > 0.10
 
     def __init__(self, log_fn=print, screenshot_ctx=None):
