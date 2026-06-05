@@ -51,8 +51,9 @@ class ResearchState(Enum):
 
 class ResearchFlow:
 
-    def __init__(self, log_fn=print):
+    def __init__(self, log_fn=print, notify_fn=None):
         self.log = log_fn
+        self.notify = notify_fn
         self.state = ResearchState.IDLE
 
         self.last_action_ts = 0
@@ -173,6 +174,10 @@ class ResearchFlow:
                 adb_tap(loc[0] + hw[1]//2, loc[1] + hw[0]//2)
                 self.lab_opened = True
                 self.log("[RESEARCH] start tapped")
+
+                if self.notify:
+                    self.notify("🔬 Ricerca completata / laboratorio libero rilevato!")
+
                 time.sleep(1)
 
             else:
@@ -267,6 +272,9 @@ class ResearchFlow:
 
                 adb_tap(loc[0] + hw[1]//2, loc[1] + hw[0]//2)
                 self.log("[RESEARCH] research started")
+
+                if self.notify:
+                    self.notify("🔬 Laboratorio libero: nuova ricerca avviata!")
 
                 time.sleep(2)
 
