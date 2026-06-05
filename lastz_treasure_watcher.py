@@ -443,11 +443,20 @@ def send_notification(text: str):
         return False
 
     try:
-        r = requests.post(DISCORD_WEBHOOK_URL, json={"content": text}, timeout=10)
-        print("[i] Discord:", r.status_code, r.text[:200])
+        log_event(f"[DISCORD] sending: {text}")
+
+        r = requests.post(
+            DISCORD_WEBHOOK_URL,
+            json={"content": text},
+            timeout=10
+        )
+
+        log_event(f"[DISCORD] status={r.status_code} ok={r.ok}")
+
         return r.ok
+
     except Exception as e:
-        print("[!] Errore Discord:", e)
+        log_event(f"[DISCORD] error: {e}")
         return False
 
 def load_templates_from_dir(directory: str) -> List[Tuple[str, np.ndarray]]:
@@ -1775,8 +1784,10 @@ def main():
                    and WORKFLOW_MANAGER.can_run(Workflow.RESEARCH)
                ):
                    _last_research_main_trigger = now_research
+                   log_event("[RESEARCH-FLOW] detected -> trigger")
                    rflow.trigger()
                    send_notification("Ricerca completata / laboratorio libero!")
+                   log_event("[RESEARCH-FLOW] notification sent")
 
                timed_tick("RESEARCH", research_flow_tick)
 
