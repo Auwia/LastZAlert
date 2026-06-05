@@ -1693,6 +1693,15 @@ def main():
                    dflow is not None
                    and dflow.state.name == "IDLE"
                    and WORKFLOW_MANAGER.can_run(Workflow.DONATION)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.RESEARCH)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.RALLY)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.MINISTRY)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.TREASURE)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.HEAL)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.FORZIERE)
+                   and not WORKFLOW_MANAGER.is_active(Workflow.HQ)
+                   and WORKFLOW_MANAGER.can_run(Workflow.DONATION)
                ):
                    dflow.trigger()
                timed_tick("DONATION", donation_flow_tick)
@@ -1767,6 +1776,7 @@ def main():
                ):
                    _last_research_main_trigger = now_research
                    rflow.trigger()
+                   send_notification("Ricerca completata / laboratorio libero!")
 
                timed_tick("RESEARCH", research_flow_tick)
 
