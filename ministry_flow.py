@@ -298,10 +298,10 @@ STATE_TIMEOUTS = {
     MinistryState.TAP_POSITION: 45,
     MinistryState.READ_X: 100,
     MinistryState.TAP_SCIENCE: 30,
-    MinistryState.READ_Y: 45,
-    MinistryState.APPLY_SCIENCE: 30,
-    MinistryState.APPLY_CONSTRUCTION_DONE: 30,
-    MinistryState.CONFIRM: 30,
+    MinistryState.READ_Y: 100,
+    MinistryState.APPLY_SCIENCE: 50,
+    MinistryState.APPLY_CONSTRUCTION_DONE: 50,
+    MinistryState.CONFIRM: 100,
     MinistryState.BACK_TO_HQ: 45,
 }
 
@@ -493,7 +493,24 @@ class MinistryFlow:
         
         txt = _ocr_application_note_yellow(roi)
         self.log(f"[MINISTRY] NOTE raw OCR: {repr(txt)}")
-        #return "will take office" in txt.lower()
+
+        start_ts = _parse_application_note(txt)
+    
+        if start_ts is None:
+            return False
+    
+        delay = start_ts - int(time.time())
+        cooldown = start_ts + 600
+        self.cooldown_until = cooldown
+    
+        self.log(
+            f"[MINISTRY] application note visible → "
+            f"delay={delay}s cooldown until {time.ctime(cooldown)}"
+        )
+    
+        if delay > 0:
+            self._schedule_confirm_popup_cleanup(delay)
+
         return _parse_hhmmss(txt) is not None
 
     def _already_applied(self, img) -> bool:

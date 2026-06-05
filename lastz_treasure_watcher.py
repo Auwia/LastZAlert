@@ -1634,7 +1634,7 @@ def main():
         mflow = ministry_flow_holder.get("flow")
         fflow = forziere_flow_holder.get("flow")
         heal_flow = HealFlow(log_event)
-        research_flow_holder["flow"] = ResearchFlow(log_event)
+        research_flow_holder["flow"] = ResearchFlow(log_event, notify_fn=send_notification)
         rflow = research_flow_holder.get("flow")
         rally_flow = rally_flow_holder.get("flow")
 
@@ -1784,10 +1784,7 @@ def main():
                    and WORKFLOW_MANAGER.can_run(Workflow.RESEARCH)
                ):
                    _last_research_main_trigger = now_research
-                   log_event("[RESEARCH-FLOW] detected -> trigger")
                    rflow.trigger()
-                   send_notification("Ricerca completata / laboratorio libero!")
-                   log_event("[RESEARCH-FLOW] notification sent")
 
                timed_tick("RESEARCH", research_flow_tick)
 
