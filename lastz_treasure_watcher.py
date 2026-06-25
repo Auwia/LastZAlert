@@ -353,8 +353,8 @@ def tap_match_in_fullscreen(roi_coords, match_loc, tmpl_hw):
 
 def tap_outside_popup(img):
     h, w = img.shape[:2]
-    x = int(w * 0.08)
-    y = int(h * 0.75)
+    x = int(w * 0.04)
+    y = int(h * 0.58)
     adb_tap(x, y)
     return x, y
 
