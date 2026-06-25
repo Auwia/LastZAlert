@@ -40,6 +40,10 @@ ROI_APPLICATION_NOTE = (0.18, 0.82, 0.74, 0.86)
 ROI_OFFICER_NICKNAME = (0.0, 1.0, 0.0, 1.0)
 ROI_OFFICER_DURATION = (0.18, 0.78, 0.34, 0.46)
 
+ROI_OFFICER_NICKNAME = (0.20, 0.95, 0.30, 0.46)
+NICKNAME_OFFICER_THRESHOLD = 0.70
+NICKNAME_SCALES = (0.80, 0.85, 0.90, 0.95, 1.00, 1.05)
+
 CENTER_SCREEN = (540, 960)
 BOTTOM_LEFT = (100, 2400)
 BOTTOM_LEFT_PIXEL = (80, 2200)
@@ -77,6 +81,48 @@ PALACE_POPUP_SLEEP_SEC = 2.0
 # ============================================================
 # OCR
 # ============================================================
+def _match_any_multiscale_local(roi_img, templates, scales=NICKNAME_SCALES):
+    best_name = None
+    best_score = 0.0
+    best_loc = (0, 0)
+    best_hw = (0, 0)
+    best_scale = 1.0
+
+    if roi_img is None or roi_img.size == 0:
+        return best_name, best_score, best_loc, best_hw, best_scale
+
+    rh, rw = roi_img.shape[:2]
+
+    for name, tmpl in templates:
+        th0, tw0 = tmpl.shape[:2]
+
+        for scale in scales:
+            tw = int(tw0 * scale)
+            th = int(th0 * scale)
+
+            if tw < 8 or th < 8:
+                continue
+            if rh < th or rw < tw:
+                continue
+
+            tmpl_s = cv2.resize(
+                tmpl,
+                (tw, th),
+                interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+            )
+
+            res = cv2.matchTemplate(roi_img, tmpl_s, cv2.TM_CCOEFF_NORMED)
+            _, score, _, loc = cv2.minMaxLoc(res)
+
+            if score > best_score:
+                best_name = name
+                best_score = float(score)
+                best_loc = loc
+                best_hw = (th, tw)
+                best_scale = scale
+
+    return best_name, best_score, best_loc, best_hw, best_scale
+
 def _normalize_time_text(txt: str) -> str:
     if not txt:
         return ""
@@ -419,10 +465,6 @@ class MinistryFlow:
             self.log("[MINISTRY] precheck: already science officer")
             return True
             
-        if self._is_current_officer(img):
-            self.log("[MINISTRY] precheck: already officer")
-            return True
-
         if self._handle_current_officer(img):
             self.log("[MINISTRY] precheck: already officer")
             return True
@@ -472,17 +514,23 @@ class MinistryFlow:
         if roi is None or roi.size == 0:
             return False
     
-        name, score, _, _ = match_any(roi, self.templates["nickname"])
+        name, score, loc, hw, scale = _match_any_multiscale_local(
+            roi,
+            self.templates["nickname"]
+        )
+    
+        self.log(
+            f"[MINISTRY][NICKNAME-CHECK] "
+            f"name={name} score={score:.3f} "
+            f"scale={scale:.2f} "
+            f"thr={NICKNAME_OFFICER_THRESHOLD:.2f} "
+            f"roi={coords}"
+        )
     
         if DEBUG:
-            ts = time.strftime("%Y%m%d_%H%M%S")
-            cv2.imwrite(
-                f"debug/ministry/nickname_roi_{name}_{score:.3f}_{ts}.png",
-                roi
-            )
-            self.log(f"[MINISTRY][DEBUG] nickname match={name} score={score:.3f}")
+            cv2.imwrite("debug/ministry/nickname_roi.png", roi)
     
-        return name is not None and score >= 0.85
+        return name is not None and score >= NICKNAME_OFFICER_THRESHOLD
 
     def _application_note_visible(self, img) -> bool:
         roi, _ = crop_roi(img, ROI_APPLICATION_NOTE)
@@ -847,8 +895,7 @@ class MinistryFlow:
             adb_tap(*BOTTOM_LEFT)
             time.sleep(0.4)
 
-            # niente scroll: science è già visibile in basso a sinistra
-            self.state = MinistryState.TAP_SCIENCE
+            self.state = MinistryState.SCROLL_UP
             self._mark_action()
             return
 
@@ -1018,7 +1065,7 @@ class MinistryFlow:
                 # siamo arrivati alla fase finale: non voglio che il watchdog globale
                 # scatti prima dell'OCR della application note
                 self.started_ts = time.time()
-                time.sleep(1.8)
+                time.sleep(2.2)
                 return
         
             # altrimenti: aspetta frame successivo (NO timeout qui)
