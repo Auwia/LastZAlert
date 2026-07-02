@@ -34,7 +34,7 @@ DEBUG_EVENTS_ONLY = True
 DEBUG_SAVE_ROIS = False
 
 ENABLE_MINISTRY_FLOW = True
-ENABLE_RALLY_FLOW = False
+ENABLE_RALLY_FLOW = True
 ENABLE_MULTI_RESOURCE_COLLECTION = True
 
 DISCORD_WEBHOOK_URL = os.environ.get(
@@ -101,7 +101,7 @@ HQ_VIEW_ROI = (0.72, 1.00, 0.82, 1.00)
 LEFT_ICON_ROI = (0.00, 0.16, 0.33, 0.82)
 TOP_ICON_ROI = (0.14, 0.55, 0.07, 0.12)
 
-DONATION_MAIN_COOLDOWN_SEC = 300
+DONATION_MAIN_COOLDOWN_SEC = 180
 RESEARCH_MAIN_COOLDOWN_SEC = 120
 
 # ============================================================
@@ -955,7 +955,7 @@ def maybe_trigger_rally() -> None:
     flow = flows.get("rally")
     if flow is None or flow.state.name != "IDLE":
         return
-    if not WORKFLOW_MANAGER.can_run(Workflow.RALLY):
+    if not can_start_common(Workflow.RALLY):
         return
 
     img = load_image(SCREENSHOT_PATH)

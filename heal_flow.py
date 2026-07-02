@@ -240,15 +240,10 @@ class HealFlow:
         if self.state == HealState.TAP_HEAL:
             adb_tap(*HEAL_BUTTON_XY)
             self.log("[HEAL-FLOW] tap HEAL")
-
-            time.sleep(1.8)  # aspetta che l'hospital si chiuda da solo
-
-            if self.heal_icon_xy:
-                adb_tap(*self.heal_icon_xy)
-                self.log(f"[HEAL-FLOW] tap HELP/CEROTTO @ {self.heal_icon_xy}")
-                time.sleep(0.2)
-
+        
+            time.sleep(2.5)
+        
             self.last_progress_ts = time.time()
             self._release_and_reset("[HEAL-FLOW] completed + release")
-
+        
             return

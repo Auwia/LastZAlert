@@ -230,7 +230,8 @@ class ResearchFlow:
                 self._mark()
             else:
                 self.log("[RESEARCH] rapid not found -> retry")
-                self._mark()
+                #self._mark()
+                self.last_action_ts = time.time()
 
             return
 
