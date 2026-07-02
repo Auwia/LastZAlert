@@ -73,7 +73,7 @@ STATE_TIMEOUTS = {
     RallyState.OPEN_RALLY: 10,
     RallyState.WAIT_LIST: 12,
     RallyState.CLICK_ADD: 8,
-    RallyState.CLICK_MARCH: 6,
+    RallyState.CLICK_MARCH: 18,
     RallyState.CONFIRM: 5,
 }
 
@@ -196,11 +196,6 @@ class RallyFlow:
         timeout = STATE_TIMEOUTS.get(self.state)
         if timeout is not None and now - self.state_started_at > timeout:
             self.log(f"[RALLY] timeout in state {self.state.name}")
-
-            # CONFIRM is optional: if it does not appear, just finish.
-            # For the other states, tap bottom-left to try to leave the current screen.
-            if self.state != RallyState.CONFIRM:
-                adb_tap(*BOTTOM_LEFT)
 
             self.finish()
             return
@@ -355,7 +350,7 @@ class RallyFlow:
                 self._tap_frac(img, self.pending_add_tap, "add")
                 self.pending_add_tap = None
                 self.log("[RALLY] join rally")
-                self.set_state(RallyState.CLICK_MARCH, cooldown=2)
+                self.set_state(RallyState.CLICK_MARCH, cooldown=8)
                 return
 
             name, score, loc, hw = match_any(img, self.add_templates)
@@ -363,7 +358,7 @@ class RallyFlow:
             if score >= ADD_THRESHOLD:
                 tap_match_in_fullscreen((0, 0, img.shape[1], img.shape[0]), loc, hw)
                 self.log(f"[RALLY] join rally template={name} score={score:.3f}")
-                self.set_state(RallyState.CLICK_MARCH, cooldown=2)
+                self.set_state(RallyState.CLICK_MARCH, cooldown=8)
                 return
 
             self.log(f"[RALLY] add not found score={score:.3f} -> exit")
@@ -383,8 +378,9 @@ class RallyFlow:
                 return
 
             self.log(f"[RALLY] march not clickable or disabled (score={score:.3f}) → exit")
+            self.cooldown_until = time.time() + 1
             #adb_tap(*BOTTOM_LEFT)
-            self.finish()
+            #self.finish()
             return
 
         # -----------------------------------------
@@ -404,5 +400,5 @@ class RallyFlow:
 
     def finish(self):
         self.log("[RALLY] finished")
-        self.set_state(RallyState.IDLE, cooldown=15)
+        self.set_state(RallyState.IDLE, cooldown=60)
         WORKFLOW_MANAGER.release(Workflow.RALLY)

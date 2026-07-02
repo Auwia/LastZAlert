@@ -593,6 +593,7 @@ class MinistryFlow:
         self.y = None
         self.xy_read = False
         self.cooldown_until = 0
+        self.state_started_ts = time.time()
         self.returning_to_construction = False
         self.log("[MINISTRY-FLOW] inizializzato")
 
@@ -601,6 +602,7 @@ class MinistryFlow:
 
     def _mark_action(self):
         self.last_action_ts = time.time()
+        self.state_started_ts = time.time()
 
     def _abort_ministry_flow(self, img=None, reason="unknown"):
         self.log(f"[MINISTRY][ABORT] reason={reason} state={self.state.name}")
@@ -830,7 +832,15 @@ class MinistryFlow:
                 if self.returning_to_construction
                 else MinistryState.READ_X
             )
-
+        
+            # Quando torniamo da Science la lista è scrollata:
+            # NON usare il tap fisso, ma il riconoscimento del template.
+            if self.returning_to_construction:
+                if self._tap_template(img, "sec_constr", next_state):
+                    self.log("[MINISTRY] construction re-detected after scroll")
+                return
+        
+            # Caso normale: usa i tap fissi
             if USE_FIXED_MINISTRY_TAPS:
                 self._tap_fixed_frac(
                     img,
@@ -839,7 +849,8 @@ class MinistryFlow:
                     next_state
                 )
                 return
-
+        
+            # Fallback senza tap fissi
             if self._tap_template(img, "sec_constr", next_state):
                 return
 
@@ -1082,12 +1093,15 @@ class MinistryFlow:
             txt = _ocr_application_note_yellow(roi)
             self.log(f"[MINISTRY][OCR NOTE] {repr(txt)}")
         
+            time.sleep(1)
             start_ts = _parse_application_note(txt)
         
             # --- FALLBACK OBBLIGATORIO ---
             delay = 0
             if start_ts is None:
                 self.log("[MINISTRY] application note non leggibile → possibile coda=0")
+                self._mark_action()
+                return
             
                 # --- NUOVA LOGICA ---
                 if self.x == 0 or self.y == 0:
