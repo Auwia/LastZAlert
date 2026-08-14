@@ -33,8 +33,8 @@ DEBUG = False
 DEBUG_EVENTS_ONLY = True
 DEBUG_SAVE_ROIS = False
 
-ENABLE_MINISTRY_FLOW = True
-ENABLE_RALLY_FLOW = True
+MINISTRY_ENABLED_PATH = "ministry_enabled.txt"
+RALLY_ENABLED_PATH = "rally_enabled.txt"
 ENABLE_MULTI_RESOURCE_COLLECTION = True
 
 DISCORD_WEBHOOK_URL = os.environ.get(
@@ -801,6 +801,16 @@ def officer_icon_visible(img) -> bool:
     top_visible = s_score_top >= SCIENCE_ICON_THRESHOLD or c_score_top >= CONSTRUCTION_ICON_THRESHOLD
     return left_visible or top_visible
 
+def flow_enabled(path: str) -> bool:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().strip() != "0"
+    except FileNotFoundError:
+        return True
+    except Exception as exc:
+        log_event(f"[FLOW ENABLE] errore lettura {path}: {exc}")
+        return True
+
 # ============================================================
 # SCHEDULING HELPERS
 # ============================================================
@@ -886,7 +896,7 @@ def maybe_trigger_donation() -> None:
 
 
 def maybe_trigger_ministry() -> None:
-    if not ENABLE_MINISTRY_FLOW:
+    if not flow_enabled(MINISTRY_ENABLED_PATH):
         return
 
     flow = flows.get("ministry")
@@ -949,7 +959,7 @@ def maybe_trigger_research() -> None:
 
 
 def maybe_trigger_rally() -> None:
-    if not ENABLE_RALLY_FLOW:
+    if not flow_enabled(RALLY_ENABLED_PATH):
         return
 
     flow = flows.get("rally")
