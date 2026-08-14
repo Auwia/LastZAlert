@@ -42,7 +42,7 @@ ROI_CHAT_UI = (0.0, 1.0, 0.0, 1.0)
 # =========================
 ACTION_COOLDOWN_SEC = 1.0
 WAIT_CHAT_AFTER_TAP_SEC = 1.0
-WAIT_AFTER_LINK_TAP_SEC = 1.2
+WAIT_AFTER_LINK_TAP_SEC = 2.5
 WAIT_AFTER_ICON_TAP_SEC = 1.0
 WAIT_AFTER_TOKEN_TAP_SEC = 1.0
 
@@ -208,15 +208,7 @@ class TreasureFlowSimplified:
             if self._seconds_from_last_action() < WAIT_AFTER_LINK_TAP_SEC:
                 return
 
-            chat_visible, chat_score = self._chat_ui_visible(img)
-
-            if chat_visible:
-                self.log(f"[VERIFY_LINK_TAP] still in chat chat_ui={chat_score:.3f} -> retry")
-                self._mark_action()
-                self.set_state(State.WAIT_CHAT_LINK)
-                return
-
-            self.log(f"[VERIFY_LINK_TAP] left chat chat_ui={chat_score:.3f} -> map")
+            self.log("[VERIFY_LINK_TAP] link tapped -> search treasure on map")
             self.set_state(State.WAIT_MAP_ICONS)
             return
 
