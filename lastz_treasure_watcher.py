@@ -26,6 +26,8 @@ from workflow_manager import WORKFLOW_MANAGER, Workflow
 # CONFIG
 # ============================================================
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 ADB_CMD = "adb"
 ADB_DEVICE = "192.168.0.95:5555"
 
@@ -33,8 +35,9 @@ DEBUG = False
 DEBUG_EVENTS_ONLY = True
 DEBUG_SAVE_ROIS = False
 
-MINISTRY_ENABLED_PATH = "ministry_enabled.txt"
-RALLY_ENABLED_PATH = "rally_enabled.txt"
+MINISTRY_ENABLED_PATH = os.path.join(BASE_DIR, "ministry_enabled.txt")
+RALLY_ENABLED_PATH = os.path.join(BASE_DIR, "rally_enabled.txt")
+
 ENABLE_MULTI_RESOURCE_COLLECTION = True
 
 DISCORD_WEBHOOK_URL = os.environ.get(
@@ -42,7 +45,7 @@ DISCORD_WEBHOOK_URL = os.environ.get(
     "https://discord.com/api/webhooks/1446565181265154190/pL-0gcgP09RlQqnqHqQDIdQqm505tqa744is2R_1eGA3Had4OXmhPgQrTLYXYzaMld0S",
 )
 
-DEBUG_DIR = "debug"
+DEBUG_DIR = os.path.join(BASE_DIR, "debug")
 DEBUG_RALLY_DIR = os.path.join(DEBUG_DIR, "rally")
 os.makedirs(DEBUG_DIR, exist_ok=True)
 os.makedirs(DEBUG_RALLY_DIR, exist_ok=True)
@@ -57,9 +60,9 @@ SCREENSHOT_IDLE_INTERVAL_SEC = 1.20
 MAIN_LOOP_ACTIVE_SLEEP_SEC = 0.08
 MAIN_LOOP_IDLE_SLEEP_SEC = 0.80
 
-TEMPLATES_TREASURES_DIR = "treasures"
-TEMPLATES_HEAL_DIR = "heal"
-TEMPLATES_HQ_UPGRADE_DIR = "hq_upgrade"
+TEMPLATES_TREASURES_DIR = os.path.join(BASE_DIR, "treasures")
+TEMPLATES_HEAL_DIR = os.path.join(BASE_DIR, "heal")
+TEMPLATES_HQ_UPGRADE_DIR = os.path.join(BASE_DIR, "hq_upgrade")
 
 MATCH_THRESHOLD_TREASURE = 0.75
 MATCH_THRESHOLD_HEAL = 0.85
@@ -87,10 +90,10 @@ TREASURE_ROI = (0.50, 0.82, 0.84, 0.97)
 RESOURCE_EVENTS = {"wood", "meal", "electricity", "alloy", "zelt", "experience"}
 MULTI_RESOURCE_BLOCK_SECONDS = 1
 
-SCIENCE_ICON_DIR = "ministry/science_icon"
-CONSTRUCTION_ICON_DIR = "ministry/construction_icon"
-CAPITALCLASH_ICON_DIR = "ministry/capital_clash"
-HQ_VIEW_DIR = "ministry/hq_view"
+SCIENCE_ICON_DIR = os.path.join(BASE_DIR, "ministry", "science_icon")
+CONSTRUCTION_ICON_DIR = os.path.join(BASE_DIR, "ministry", "construction_icon")
+CAPITALCLASH_ICON_DIR = os.path.join(BASE_DIR, "ministry", "capital_clash")
+HQ_VIEW_DIR = os.path.join(BASE_DIR, "ministry", "hq_view")
 
 SCIENCE_ICON_THRESHOLD = 0.80
 CONSTRUCTION_ICON_THRESHOLD = 0.80
