@@ -178,7 +178,6 @@ HTML = """<!doctype html>
       <button id="calibraBtn" onclick="calibra()">CALIBRA</button>
       <button id="backBtn" onclick="androidBack()">BACK</button>
       <button id="homeBtn" onclick="androidHome()">HOME</button>
-      <button onclick="refreshNow()">Refresh immagine</button>
       <input id="healBatchInput" type="number" min="1" step="1" placeholder="Heal batch" />
       <button id="healBatchBtn" onclick="setHealBatch()">Set heal batch</button>
       <label class="flow-switch">
@@ -220,10 +219,6 @@ HTML = """<!doctype html>
 
     function refreshImage(version) {
       img.src = "/image?v=" + encodeURIComponent(version || Date.now());
-    }
-
-    function refreshNow() {
-      refreshImage(Date.now());
     }
 
     async function fetchConfig() {
