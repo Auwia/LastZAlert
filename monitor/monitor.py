@@ -602,6 +602,12 @@ def tap_lastz_icon():
     screen = adb_capture_screen_cv()
     match = find_template_on_screen(screen, ICON_TEMPLATE_PATH)
 
+    print(
+        f"[LASTZ ICON] score={match['score']:.3f} "
+        f"scale={match['scale']:.2f} "
+        f"center=({match['center_x']},{match['center_y']})"
+    )
+
     run_cmd(adb_prefix() + [
         "shell", "input", "tap",
         str(match["center_x"]), str(match["center_y"]),
