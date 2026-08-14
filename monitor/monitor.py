@@ -17,11 +17,13 @@ import numpy as np
 HOST = "192.168.0.55"
 PORT = 8000
 
-IMAGE_PATH = Path("/home/auwia/LastZAlert/debug/screen_treasure.png")
-ICON_TEMPLATE_PATH = Path("/home/auwia/project/LastZAlert/boot/boot_icon.png")
-HEAL_BATCH_PATH = Path("/home/auwia/LastZAlert/heal_batch.txt")
-MINISTRY_ENABLED_PATH = Path("/home/auwia/LastZAlert/ministry_enabled.txt")
-RALLY_ENABLED_PATH = Path("/home/auwia/LastZAlert/rally_enabled.txt")
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+IMAGE_PATH = BASE_DIR / "debug" / "screen_treasure.png"
+ICON_TEMPLATE_PATH = BASE_DIR / "boot" / "boot_icon.png"
+HEAL_BATCH_PATH = BASE_DIR / "heal_batch.txt"
+MINISTRY_ENABLED_PATH = BASE_DIR / "ministry_enabled.txt"
+RALLY_ENABLED_PATH = BASE_DIR / "rally_enabled.txt"
 
 # Modalità controllo:
 #   "adb"     -> Android / emulatore
@@ -192,9 +194,9 @@ HTML = """<!doctype html>
     </div>
 
     <img id="screen" src="/image?v=init" alt="screen_treasure.png" />
-    <div class="small">File monitorato: /home/auwia/LastZAlert/debug/screen_treasure.png</div>
-    <div class="small">Template icona: /home/auwia/project/LastZAlert/boot/boot_icon.png</div>
-    <div class="small">Heal batch: /home/auwia/LastZAlert/heal_batch.txt</div>
+    <div class="small">File monitorato: debug/screen_treasure.png</div>
+    <div class="small">Template icona: boot/boot_icon.png</div>
+    <div class="small">Heal batch: heal_batch.txt</div>
     <div class="small">Controllo gioco: <span id="modeLabel"></span></div>
   </div>
 
@@ -908,8 +910,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    os.makedirs("/home/auwia/LastZAlert/monitor", exist_ok=True)
-
     ThreadingHTTPServer.daemon_threads = True
     server = ThreadingHTTPServer((HOST, PORT), Handler)
 
