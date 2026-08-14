@@ -715,11 +715,14 @@ def hq_upgrade_watcher_tick(stop_evt: threading.Event) -> None:
         roi, coords = crop_roi(img, HQ_BUBBLE_ROI)
         name, score, loc, hw = match_any(roi, _hq_templates)
         if score >= MATCH_THRESHOLD_HQ and name and "bubble" in name.lower():
-            if not WORKFLOW_MANAGER.can_run(Workflow.HQ):
-                return
             now = time.time()
+
             if now - _last_hq_action_ts < HQ_COOLDOWN_SEC:
                 return
+
+            if not WORKFLOW_MANAGER.acquire(Workflow.HQ):
+                return
+
             _last_hq_action_ts = now
             tap_match_in_fullscreen(coords, loc, hw)
             log_event("[HQ] bubble -> chat")
