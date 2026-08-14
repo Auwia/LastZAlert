@@ -72,9 +72,11 @@ def _ocr_text(img):
     gray = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY)[1]
     return pytesseract.image_to_string(gray, config="--psm 6")
 
-def _parse_attempts(txt: str) -> int:
+def _parse_attempts(txt: str):
     m = re.search(r"(\d+)\s*/\s*(\d+)", txt)
-    return int(m.group(1)) if m else 0
+    if not m:
+        return None, None
+    return int(m.group(1)), int(m.group(2))
 
 def _parse_cooldown_seconds(txt: str) -> int:
     m = re.search(r"(\d+):(\d+):(\d+)", txt)
@@ -295,50 +297,48 @@ class DonationFlow:
         if self.state == DonationState.READ_ATTEMPTS:
             roi, _ = crop_roi(img, ROI_ATTEMPTS)
             txt = _ocr_text(roi)
-
-            attempts = _parse_attempts(txt)
-
-            if attempts < 0:
+        
+            attempts, max_attempts = _parse_attempts(txt)
+        
+            if attempts is None:
                 self.log(f"[DONATION-FLOW] OCR attempts FAILED '{txt.strip()}', retry")
                 self._mark_action()
                 return
-            
+        
             if attempts == 0:
                 self.log("[DONATION-FLOW] no attempts left → read cooldown")
                 self.state = DonationState.READ_COOLDOWN
                 self._mark_action()
                 return
-
-            MAX_ATTEMPTS = 20
+        
             RECHARGE_MINUTES = 17
-            
-            if attempts < MAX_ATTEMPTS:
-                missing = MAX_ATTEMPTS - attempts
+        
+            if attempts < max_attempts:
+                missing = max_attempts - attempts
                 wait_seconds = missing * RECHARGE_MINUTES * 60
-            
+        
                 self.next_allowed = time.time() + wait_seconds
+        
                 self.log(
-                    f"[DONATION-FLOW] attempts={attempts}/20 → next check in "
-                    f"{wait_seconds//60} min"
+                    f"[DONATION-FLOW] attempts={attempts}/{max_attempts} "
+                    f"→ next check in {wait_seconds//60} min"
                 )
-            
-                # chiudi UI
+        
                 cleanup_coords = [(100, 2400), (100, 2400), (100, 2400)]
                 for i, (x, y) in enumerate(cleanup_coords):
                     time.sleep(0.4)
                     adb_tap(x, y)
-            
+        
                 self.state = DonationState.IDLE
                 WORKFLOW_MANAGER.release(Workflow.DONATION)
                 self._mark_action()
                 return
-            
+        
             self.attempts_left = attempts
             self.initial_attempts = attempts
             self.last_progress_ts = time.time()
+        
             self.state = DonationState.DONATE_LOOP
-            self._mark_action()
-
             self._mark_action()
             return
 

@@ -23,6 +23,7 @@ FIRST_ROW_LABEL_ROI = (0.78, 0.93, 0.33, 0.42)
 HEAL_BUTTON_XY = (900, 2120)
 DEFAULT_HEAL_BATCH = 50
 HEAL_BATCH_FILE = "heal_batch.txt"
+HEAL_AFTER_TAP_WAIT_SEC = 5.0
 
 def crop_roi_local(img, roi_frac):
     h, w = img.shape[:2]
@@ -64,7 +65,7 @@ class HealState(Enum):
     WAIT_HOSPITAL_UI = 2
     SET_BATCH = 3
     TAP_HEAL = 4
-
+    WAIT_AFTER_HEAL = 5
 
 class HealFlow:
     def __init__(self, log_fn):
@@ -85,6 +86,8 @@ class HealFlow:
         self.templates = {
             "hospital": load_templates("hospital"),
         }
+
+        self.wait_after_heal_ts = 0.0
 
         self.log("[HEAL-FLOW] inizializzato")
 
@@ -240,10 +243,17 @@ class HealFlow:
         if self.state == HealState.TAP_HEAL:
             adb_tap(*HEAL_BUTTON_XY)
             self.log("[HEAL-FLOW] tap HEAL")
-        
-            time.sleep(2.5)
-        
+
+            self.wait_after_heal_ts = time.time()
+            self.state = HealState.WAIT_AFTER_HEAL
             self.last_progress_ts = time.time()
+            self._mark_action()
+            return
+
+        # 5) aspetta che la UI si stabilizzi prima di rilasciare
+        if self.state == HealState.WAIT_AFTER_HEAL:
+            if time.time() - self.wait_after_heal_ts < HEAL_AFTER_TAP_WAIT_SEC:
+                return
+
             self._release_and_reset("[HEAL-FLOW] completed + release")
-        
             return

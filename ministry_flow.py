@@ -77,6 +77,7 @@ TAP_APPLY_FRAC       = (0.50, 0.81)   # bottone Apply
 
 CAPITAL_LOAD_SLEEP_SEC = 4.0
 PALACE_POPUP_SLEEP_SEC = 2.0
+NOTE_READ_MAX_SEC = 12.0
 
 # ============================================================
 # OCR
@@ -201,26 +202,39 @@ def _ocr_application_note_yellow(img):
     if img is None or img.size == 0:
         return ""
 
-    # Converti in HSV
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    try:
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-    # Maschera giallo
-    lower_yellow = (15, 80, 120)
-    upper_yellow = (40, 255, 255)
-    mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+        lower_yellow = (15, 80, 120)
+        upper_yellow = (40, 255, 255)
+        mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
 
-    # Chiudi i buchi nei numeri
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-    # Nero su bianco
-    mask = cv2.bitwise_not(mask)
+        mask = cv2.bitwise_not(mask)
 
-    # Ingrandisci (FONDAMENTALE)
-    mask = cv2.resize(mask, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+        mask = cv2.resize(
+            mask,
+            None,
+            fx=2,
+            fy=2,
+            interpolation=cv2.INTER_CUBIC
+        )
 
-    config = "--psm 7 -c tessedit_char_whitelist=0123456789:"
-    return pytesseract.image_to_string(mask, config=config)
+        # protezione extra: evita crash su immagini/segmenti troppo piccoli
+        if mask is None or mask.size == 0:
+            return ""
+
+        h, w = mask.shape[:2]
+        if h < 10 or w < 10:
+            return ""
+
+        config = "--psm 7 -c tessedit_char_whitelist=0123456789:"
+        return pytesseract.image_to_string(mask, config=config)
+
+    except Exception:
+        return ""
 
 def _ocr_application_note(img):
     if img is None or img.size == 0:
@@ -595,6 +609,7 @@ class MinistryFlow:
         self.cooldown_until = 0
         self.state_started_ts = time.time()
         self.returning_to_construction = False
+        self.note_read_started_ts = None
         self.log("[MINISTRY-FLOW] inizializzato")
 
     def _cooldown_ok(self) -> bool:
@@ -1083,47 +1098,62 @@ class MinistryFlow:
             return
 
         if self.state == MinistryState.READ_APPLICATION_NOTE:
-            roi, _ = crop_roi(img, ROI_APPLICATION_NOTE)
-            if roi is None or roi.size == 0:
-                return
-        
-            if DEBUG:
-                cv2.imwrite("debug/ministry/roi_application_note.png", roi)
-        
-            txt = _ocr_application_note_yellow(roi)
-            self.log(f"[MINISTRY][OCR NOTE] {repr(txt)}")
-        
-            time.sleep(1)
-            start_ts = _parse_application_note(txt)
-        
-            # --- FALLBACK OBBLIGATORIO ---
-            delay = 0
-            if start_ts is None:
-                self.log("[MINISTRY] application note non leggibile → possibile coda=0")
-                self._mark_action()
-                return
-            
-                # --- NUOVA LOGICA ---
-                if self.x == 0 or self.y == 0:
-                    self.log("[MINISTRY] coda=0 + OCR vuoto → tap extra per uscire")
-                    adb_tap(*BOTTOM_LEFT)
-                    time.sleep(0.4)
-            
-                # fallback cooldown
-                self.log("[MINISTRY] cooldown forzato 10 min")
-                cooldown = int(time.time()) + 600
-                self.cooldown_until = cooldown
-            else:
+                if self.note_read_started_ts is None:
+                    self.note_read_started_ts = time.time()
+    
+                roi, _ = crop_roi(img, ROI_APPLICATION_NOTE)
+                if roi is None or roi.size == 0:
+                    return
+    
+                if DEBUG:
+                    cv2.imwrite("debug/ministry/roi_application_note.png", roi)
+    
+                txt = _ocr_application_note_yellow(roi)
+                self.log(f"[MINISTRY][OCR NOTE] {repr(txt)}")
+    
+                start_ts = _parse_application_note(txt)
+    
+                delay = 0
+    
+                if start_ts is None:
+                    elapsed_note = time.time() - self.note_read_started_ts
+    
+                    self.log(
+                        f"[MINISTRY] application note OCR vuoto, retry "
+                        f"{elapsed_note:.1f}/{NOTE_READ_MAX_SEC:.1f}s"
+                    )
+    
+                    if elapsed_note < NOTE_READ_MAX_SEC:
+                        self._mark_action()
+                        time.sleep(1.0)
+                        return
+    
+                    self.log(
+                        "[MINISTRY] application note non leggibile dopo retry "
+                        "→ fallback cooldown 10 min"
+                    )
+    
+                    self.cooldown_until = int(time.time()) + 600
+                    self.note_read_started_ts = None
+    
+                    self.state = MinistryState.EXIT_MINISTRY
+                    self._mark_action()
+                    return
+    
+                self.note_read_started_ts = None
+    
                 delay = start_ts - int(time.time())
                 cooldown = start_ts + 600
-                self.cooldown_until = cooldown 
+                self.cooldown_until = cooldown
+    
                 self.log(f"[MINISTRY] cooldown until {time.ctime(cooldown)}")
-            if delay > 0:
-                self._schedule_confirm_popup_cleanup(delay)
-        
-            self.log("[MINISTRY] ministry finished → exiting")
-            self.state = MinistryState.EXIT_MINISTRY
-            return
+    
+                if delay > 0:
+                    self._schedule_confirm_popup_cleanup(delay)
+    
+                self.log("[MINISTRY] ministry finished → exiting")
+                self.state = MinistryState.EXIT_MINISTRY
+                return
 
         if self.state == MinistryState.EXIT_MINISTRY:
             adb_tap(*BOTTOM_LEFT)
