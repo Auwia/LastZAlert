@@ -59,7 +59,7 @@ USE_FIXED_NAV_TAPS = True
 USE_FIXED_APPLY_TAPS = True
 
 USE_FIXED_SEARCH_TAP = False
-TAP_SEARCH_TIMEOUT_SEC = 10
+TAP_SEARCH_TIMEOUT_SEC = 20
 
 # schermata mappa / ricerca capitale
 TAP_SEARCH_FRAC      = (0.86, 0.17)   # lente blu a destra

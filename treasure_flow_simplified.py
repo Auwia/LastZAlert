@@ -18,7 +18,7 @@ BASE_DIR = "treasure_flow"
 
 CHAT_LINK_DIR = os.path.join(BASE_DIR, "chat_link")
 CHAT_UI_DIR = os.path.join(BASE_DIR, "chat_ui")
-TREASURE_ICONS_DIR = os.path.join(BASE_DIR, "helicopter")
+TREASURE_ICONS_DIR = os.path.join(BASE_DIR, "treasures")
 TOKEN_DIR = os.path.join(BASE_DIR, "gold_token")
 CONGR_DIR = os.path.join(BASE_DIR, "congratulations")
 
