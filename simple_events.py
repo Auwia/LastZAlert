@@ -27,7 +27,7 @@ SIMPLE_EVENTS = {
         "templates": "back_home",
         "roi": (0.75, 1.0, 0.75, 1.0),
         "threshold": 0.9,
-        "cooldown": 10,
+        "cooldown": 17,
         "tap": "bottom_right",
         "log": "[BACK_AT_HOME]",
     },
@@ -43,7 +43,7 @@ SIMPLE_EVENTS = {
         "templates": "cancel_popup",
         "roi": (0.0, 1.00, 0.0, 1.0),
         "threshold": 0.9,
-        "cooldown": 15,
+        "cooldown": 17,
         "log": "[CANCEL_POPUP]",
     },
     #"electricity": {

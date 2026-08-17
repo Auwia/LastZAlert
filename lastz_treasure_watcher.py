@@ -502,11 +502,12 @@ def treasure_detect_tick(stop_evt: threading.Event) -> None:
     log_event(f"[TREASURE] rilevato {name} score={score:.3f}")
     send_notification(f"🎁 Tesoro rilevato! ({name}) score={score:.2f}")
 
-    WORKFLOW_MANAGER.force(Workflow.TREASURE)
     flow = flows.get("treasure")
     if flow is not None:
         flow.trigger(coords, loc, hw)
         log_event("[TREASURE] detected -> simplified flow")
+    else:
+        log_event("[TREASURE] detected but workflow busy -> waiting")
 
     _last_treasure_alert_ts = now
     _treasure_hits = 0
