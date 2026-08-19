@@ -14,11 +14,12 @@ ADB_CMD = "adb"
 # =========================
 # TEMPLATE DIR
 # =========================
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = "treasure_flow"
 
 CHAT_LINK_DIR = os.path.join(BASE_DIR, "chat_link")
 CHAT_UI_DIR = os.path.join(BASE_DIR, "chat_ui")
-TREASURE_ICONS_DIR = os.path.join(BASE_DIR, "treasures")
+TREASURE_ICONS_DIR = os.path.join(SCRIPT_DIR, "treasures")
 TOKEN_DIR = os.path.join(BASE_DIR, "gold_token")
 CONGR_DIR = os.path.join(BASE_DIR, "congratulations")
 
@@ -110,6 +111,10 @@ class TreasureFlowSimplified:
         self.t_chat = load_templates(CHAT_LINK_DIR)
         self.t_chat_ui = load_templates(CHAT_UI_DIR)
         self.t_icons = load_templates(TREASURE_ICONS_DIR)
+        self.log(
+            f"[TREASURE INIT] helicopter templates={len(self.t_icons)} "
+            f"dir='{TREASURE_ICONS_DIR}'"
+        )
         self.t_token = load_templates(TOKEN_DIR)
         self.t_congr = load_templates(CONGR_DIR)
 
@@ -214,6 +219,12 @@ class TreasureFlowSimplified:
 
         if self.state == State.WAIT_MAP_ICONS:
             best_name, score, loc, size = match_any(img, self.t_icons)
+
+            self.log(
+                f"[WAIT_MAP_ICONS] best={best_name} "
+                f"score={score:.3f} templates={len(self.t_icons)} "
+                f"time={self._seconds_in_state():.1f}s"
+            )
 
             if best_name is not None and score >= THR_ICON:
                 tap_match((0, 0, img.shape[1], img.shape[0]), loc, size)
