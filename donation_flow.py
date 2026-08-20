@@ -193,6 +193,7 @@ class DonationFlow:
                 adb_tap(cx, cy)
                 self.log(f"[DONATION-FLOW] alliance icon tap score={score:.3f}")
                 self.state = DonationState.WAIT_ALLIANCE_MENU
+                self.last_progress_ts = time.time()
                 self._mark_action()
             return
 
@@ -203,6 +204,7 @@ class DonationFlow:
             name, score, _, _ = match_any(img, self.templates["alliance_button"])
             if name and score >= 0.2:
                 self.state = DonationState.FIND_TECH_BUTTON
+                self.last_progress_ts = time.time()
                 self._mark_action()
             return
 
@@ -268,6 +270,7 @@ class DonationFlow:
                 )
                 self.log(f"[DONATION-FLOW] alliance tech tap score={score:.3f}")
                 self.state = DonationState.FIND_RECOMMENDED
+                self.last_progress_ts = time.time()
                 self._mark_action()
             return
 

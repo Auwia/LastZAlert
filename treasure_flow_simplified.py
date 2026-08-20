@@ -19,7 +19,7 @@ BASE_DIR = "treasure_flow"
 
 CHAT_LINK_DIR = os.path.join(BASE_DIR, "chat_link")
 CHAT_UI_DIR = os.path.join(BASE_DIR, "chat_ui")
-TREASURE_ICONS_DIR = os.path.join(SCRIPT_DIR, "treasures")
+TREASURE_ICONS_DIR = os.path.join(BASE_DIR, "helicopter")
 TOKEN_DIR = os.path.join(BASE_DIR, "gold_token")
 CONGR_DIR = os.path.join(BASE_DIR, "congratulations")
 
@@ -226,12 +226,53 @@ class TreasureFlowSimplified:
                 f"time={self._seconds_in_state():.1f}s"
             )
 
+            os.makedirs("debug/treasure", exist_ok=True)
+            cv2.imwrite("debug/treasure/wait_map_icons_full.png", img)
+        
+            if best_name is not None:
+                dbg = img.copy()
+                mx, my = loc
+                h, w = size
+        
+                cv2.rectangle(
+                    dbg,
+                    (mx, my),
+                    (mx + w, my + h),
+                    (0, 0, 255),
+                    4
+                )
+        
+                cv2.putText(
+                    dbg,
+                    f"{best_name} {score:.3f}",
+                    (mx, max(30, my - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (0, 0, 255),
+                    2
+                )
+        
+                cv2.imwrite(
+                    "debug/treasure/wait_map_icons_match.png",
+                    dbg
+                )
+    
             if best_name is not None and score >= THR_ICON:
-                tap_match((0, 0, img.shape[1], img.shape[0]), loc, size)
+                x, y = tap_match(
+                    (0, 0, img.shape[1], img.shape[0]),
+                    loc,
+                    size
+                )
+            
+                self.log(
+                    f"[WAIT_MAP_ICONS] TAP {best_name} "
+                    f"score={score:.3f} @ {x},{y}"
+                )
+           
                 self._mark_action()
                 self.set_state(State.WAIT_TOKEN)
                 return
-
+    
             if self._seconds_in_state() > TIMEOUT_MAP_ICONS_SEC:
                 self.log(f"[WAIT_MAP_ICONS] timeout score={score:.3f}")
                 self.set_state(State.DONE)

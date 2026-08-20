@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import cv2
+import numpy as np
+import pytesseract
+import re
 import time
 from datetime import datetime
 from enum import Enum
@@ -18,15 +22,28 @@ THR_RECOMMENDED = 0.56
 ACTION_COOLDOWN = 1.0
 STALL_TIMEOUT = 40
 
-# nodi da testare (ordine visivo)
-NODE_COORDS = [
-    (400, 900),   # top-left
-    (800, 900),   # top-right
-    (400, 1200),  # mid-left
-    (800, 1200),  # mid-right
-    (400, 1500),  # bottom-left
-    (800, 1500),  # bottom-right
+# ordine = priorità
+RESEARCH_PRIORITIES = [
+    ("hero", "research/hero_training.png"),
+    ("military", "research/military_strategies.png"),
+    ("rapid", "research/rapid_grow.png"),
 ]
+
+# rilevamento nodi
+NODE_MIN_W = 120
+NODE_MAX_W = 260
+NODE_MIN_H = 100
+NODE_MAX_H = 260
+
+# quanto può essere "irregolare" il poligono
+NODE_POLY_EPSILON = 0.045
+
+# per considerare due nodi sulla stessa riga
+NODE_ROW_TOLERANCE = 80
+
+# evita header/footer
+NODE_SCAN_Y_MIN = 180
+NODE_SCAN_Y_MAX = 1820
 
 BACK = (100, 2400)
 
@@ -38,13 +55,229 @@ class ResearchState(Enum):
     IDLE = 0
     FIND_START = 1
     TAP_LAB = 2
-    TAP_RAPID = 3
+    TAP_CATEGORY = 3
     SCAN_NODE = 4
     START_RESEARCH = 5
     REPLENISH = 6
     HELP = 7
     EXIT = 8
 
+
+def find_next_research_node(img, log_fn=print):
+
+    nodes = detect_research_nodes(img)
+    nodes = sort_nodes_visual(nodes)
+
+    if DEBUG:
+        log_fn(f"[RESEARCH] geometric nodes={len(nodes)}")
+
+    for node in nodes:
+
+        progress = read_node_progress(img, node)
+
+        if DEBUG:
+            log_fn(
+                f"[RESEARCH] node "
+                f"@ {node['x']},{node['y']} "
+                f"status={progress}"
+            )
+
+        if progress is None:
+            continue
+
+        if progress["max"]:
+            continue
+
+        node["progress"] = progress
+        return node
+
+    return None
+
+def sort_nodes_visual(nodes):
+    """
+    Ordina:
+        alto -> basso
+        e nella stessa riga:
+        sinistra -> destra
+    """
+
+    if not nodes:
+        return []
+
+    nodes = sorted(nodes, key=lambda n: n["y"])
+
+    rows = []
+
+    for node in nodes:
+
+        inserted = False
+
+        for row in rows:
+            avg_y = sum(n["y"] for n in row) / len(row)
+
+            if abs(node["y"] - avg_y) <= NODE_ROW_TOLERANCE:
+                row.append(node)
+                inserted = True
+                break
+
+        if not inserted:
+            rows.append([node])
+
+    result = []
+
+    for row in rows:
+        row.sort(key=lambda n: n["x"])
+        result.extend(row)
+
+    return result
+
+def read_node_progress(img, node):
+    x, y, w, h = node["bbox"]
+
+    # il testo è nella parte bassa del nodo
+    y1 = y + int(h * 0.62)
+    y2 = y + h
+
+    x1 = max(0, x - 10)
+    x2 = min(img.shape[1], x + w + 10)
+
+    roi = img[y1:y2, x1:x2]
+
+    if roi.size == 0:
+        return None
+
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+
+    gray = cv2.resize(
+        gray,
+        None,
+        fx=3,
+        fy=3,
+        interpolation=cv2.INTER_CUBIC
+    )
+
+    # testo chiaro su fondo scuro
+    _, bw = cv2.threshold(
+        gray,
+        0,
+        255,
+        cv2.THRESH_BINARY + cv2.THRESH_OTSU
+    )
+
+    txt = pytesseract.image_to_string(
+        bw,
+        config=(
+            "--psm 7 "
+            "-c tessedit_char_whitelist=MAX0123456789/"
+        )
+    )
+
+    txt = txt.upper()
+    txt = txt.replace(" ", "")
+    txt = txt.replace("\n", "")
+
+    if "MAX" in txt:
+        return {
+            "text": "MAX",
+            "current": 10,
+            "total": 10,
+            "max": True
+        }
+
+    m = re.search(r"(\d{1,2})/(\d{1,2})", txt)
+
+    if m:
+        current = int(m.group(1))
+        total = int(m.group(2))
+
+        return {
+            "text": f"{current}/{total}",
+            "current": current,
+            "total": total,
+            "max": current >= total
+        }
+
+    return None
+
+def detect_research_nodes(img):
+    """
+    Cerca forme compatibili con i nodi della research tree.
+
+    ritorna:
+        [
+            {
+                "x": center_x,
+                "y": center_y,
+                "bbox": (x, y, w, h),
+                "vertices": n
+            },
+            ...
+        ]
+    """
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # evidenzia bordi
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(blur, 50, 140)
+
+    # chiude piccoli buchi nei contorni
+    kernel = np.ones((3, 3), np.uint8)
+    edges = cv2.dilate(edges, kernel, iterations=1)
+
+    contours, _ = cv2.findContours(
+        edges,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    nodes = []
+
+    for cnt in contours:
+
+        peri = cv2.arcLength(cnt, True)
+
+        approx = cv2.approxPolyDP(
+            cnt,
+            NODE_POLY_EPSILON * peri,
+            True
+        )
+
+        vertices = len(approx)
+
+        # il nodo è fondamentalmente esagonale,
+        # ma lasciamo tolleranza ai bordi grafici
+        if vertices < 5 or vertices > 9:
+            continue
+
+        x, y, w, h = cv2.boundingRect(approx)
+
+        if w < NODE_MIN_W or w > NODE_MAX_W:
+            continue
+
+        if h < NODE_MIN_H or h > NODE_MAX_H:
+            continue
+
+        if y < NODE_SCAN_Y_MIN or y > NODE_SCAN_Y_MAX:
+            continue
+
+        ratio = w / float(h)
+
+        if ratio < 0.65 or ratio > 1.45:
+            continue
+
+        cx = x + w // 2
+        cy = y + h // 2
+
+        nodes.append({
+            "x": cx,
+            "y": cy,
+            "bbox": (x, y, w, h),
+            "vertices": vertices,
+        })
+
+    return nodes
+        
 # ============================================================
 # FLOW
 # ============================================================
@@ -73,6 +306,15 @@ class ResearchFlow:
             "help": load_templates("research/help_button.png"),
             "replenish": load_templates("research/replenish.png"),
         }
+
+        self.research_priorities = [
+            ("hero", load_templates("research/hero_training.png")),
+            ("military", load_templates("research/military_strategies.png")),
+            ("rapid", load_templates("research/rapid_grow.png")),
+        ]
+        
+        self.research_index = 0
+        self.current_research = None
 
         self.log("[RESEARCH-FLOW] initialized")
 
@@ -198,7 +440,8 @@ class ResearchFlow:
                 adb_tap(loc[0] + hw[1]//2, loc[1] + hw[0]//2)
                 self.log("[RESEARCH] lab tapped")
                 time.sleep(2)
-                self.state = ResearchState.TAP_RAPID
+                self.research_index = 0
+                self.state = ResearchState.TAP_CATEGORY
                 self._mark()
             else:
                 if DEBUG:
@@ -209,30 +452,44 @@ class ResearchFlow:
 
         # -----------------------------------------------------
 
-        if self.state == ResearchState.TAP_RAPID:
-
-            if self.is_wednesday_mode:
-                if self._tap_recommended(img, "[RESEARCH] recommended category tapped"):
-                    self.state = ResearchState.SCAN_NODE
-                    self._mark()
-                else:
-                    self.log("[RESEARCH] recommended not found -> retry")
-                    self._mark()
+        if self.state == ResearchState.TAP_CATEGORY:
+        
+            if self.research_index >= len(self.research_priorities):
+                self.log("[RESEARCH] no research available in priorities")
+                self.state = ResearchState.EXIT
+                self._mark()
                 return
-
-            name, score, loc, hw = match_any(img, self.templates["rapid"])
-
+        
+            research_name, templates = \
+                self.research_priorities[self.research_index]
+        
+            name, score, loc, hw = match_any(img, templates)
+        
             if name and score >= THR:
-                adb_tap(loc[0] + hw[1]//2, loc[1] + hw[0]//2)
-                self.log("[RESEARCH] rapid growth tapped")
-                self.node_index = 0
+        
+                adb_tap(
+                    loc[0] + hw[1] // 2,
+                    loc[1] + hw[0] // 2
+                )
+        
+                self.current_research = research_name
+        
+                self.log(
+                    f"[RESEARCH] category opened: {research_name}"
+                )
+        
+                time.sleep(1.5)
+        
                 self.state = ResearchState.SCAN_NODE
                 self._mark()
-            else:
-                self.log("[RESEARCH] rapid not found -> retry")
-                #self._mark()
-                self.last_action_ts = time.time()
-
+                return
+        
+            self.log(
+                f"[RESEARCH] category {research_name} not found"
+            )
+        
+            self.research_index += 1
+            self._mark()
             return
 
         # -----------------------------------------------------
@@ -250,18 +507,49 @@ class ResearchFlow:
                     self._mark()
                 return
 
-            if self.node_index >= len(NODE_COORDS):
-                self.log("[RESEARCH] no research available")
-                self.state = ResearchState.EXIT
+            if self.state == ResearchState.SCAN_NODE:
+            
+                node = find_next_research_node(
+                    img,
+                    self.log
+                )
+            
+                if node:
+            
+                    p = node["progress"]
+            
+                    self.log(
+                        f"[RESEARCH] next node "
+                        f"{self.current_research}: "
+                        f"{p['text']} "
+                        f"@ {node['x']},{node['y']}"
+                    )
+            
+                    adb_tap(
+                        node["x"],
+                        node["y"]
+                    )
+            
+                    self.state = ResearchState.START_RESEARCH
+                    self._mark()
+                    return
+            
+                # questa categoria non ha niente disponibile
+                self.log(
+                    f"[RESEARCH] "
+                    f"{self.current_research}: no available node"
+                )
+            
+                # torna alla schermata Techs
+                adb_tap(*BACK)
+                time.sleep(1)
+            
+                self.research_index += 1
+                self.current_research = None
+            
+                self.state = ResearchState.TAP_CATEGORY
+                self._mark()
                 return
-
-            x, y = NODE_COORDS[self.node_index]
-            adb_tap(x, y)
-
-            self.node_index += 1
-            self.state = ResearchState.START_RESEARCH
-            self._mark()
-            return
 
         # -----------------------------------------------------
 
