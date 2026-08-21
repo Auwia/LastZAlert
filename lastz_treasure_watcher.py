@@ -1161,9 +1161,43 @@ def main() -> None:
     if not check_adb_device():
         return
 
-    stop_evt = threading.Event()
-    threading.Thread(target=screenshot_producer, args=(stop_evt,), daemon=True).start()
+    # --------------------------------------------------------
+    # STARTUP: elimina screenshot del run precedente
+    # --------------------------------------------------------
+    if os.path.exists(SCREENSHOT_PATH):
+        try:
+            os.remove(SCREENSHOT_PATH)
+            log_event("[STARTUP] vecchio screenshot eliminato")
+        except Exception as exc:
+            log_event(f"[STARTUP] errore eliminazione screenshot: {exc}")
 
+    stop_evt = threading.Event()
+
+    # Avvia SOLO il produttore degli screenshot
+    threading.Thread(
+        target=screenshot_producer,
+        args=(stop_evt,),
+        daemon=True
+    ).start()
+
+    # --------------------------------------------------------
+    # NON avviare nessun workflow finché non abbiamo
+    # realmente il primo screenshot nuovo
+    # --------------------------------------------------------
+    log_event("[STARTUP] attendo primo screenshot nuovo...")
+
+    while not stop_evt.is_set():
+        if os.path.exists(SCREENSHOT_PATH):
+            with SCREENSHOT_LOCK:
+                img = cv2.imread(SCREENSHOT_PATH, cv2.IMREAD_COLOR)
+
+            if img is not None:
+                log_event("[STARTUP] primo screenshot pronto -> avvio bot")
+                break
+
+        time.sleep(0.1)
+
+    # SOLO ORA inizializziamo i flow
     heal_flow = init_flows()
 
     try:

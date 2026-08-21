@@ -37,6 +37,7 @@ THR_CONGR = 0.73
 # =========================
 ROI_CHAT = (0.02, 0.98, 0.18, 0.92)
 ROI_CHAT_UI = (0.0, 1.0, 0.0, 1.0)
+ROI_TOKEN_AREA = (0.28, 0.72, 0.36, 0.68)
 
 # =========================
 # TIMINGS
@@ -279,9 +280,17 @@ class TreasureFlowSimplified:
             return
 
         if self.state == State.WAIT_TOKEN:
-            token_name, score, loc, size = match_any(img, self.t_token)
-            heli_name, heli_score, _, _ = match_any(img, self.t_icons)
-        
+            roi, coords = crop(img, ROI_TOKEN_AREA)
+            
+            token_name, score, loc, size = match_any(
+                roi,
+                self.t_token
+            )
+            
+            heli_name, heli_score, _, _ = match_any(
+                roi,
+                self.t_icons
+            )
             self.log(f"[WAIT_TOKEN] heli={heli_score:.3f} token_score={score:.3f} time={self._seconds_in_state():.2f}")
         
             # se elicottero visibile → reset timer
@@ -289,7 +298,11 @@ class TreasureFlowSimplified:
                 self.state_enter_ts = time.time()
         
             if token_name is not None and score >= THR_TOKEN:
-                x, y = tap_match((0, 0, img.shape[1], img.shape[0]), loc, size)
+                x, y = tap_match(
+                        coords,
+                        loc,
+                        size
+                )
                 self.log(f"[WAIT_TOKEN] TAP token={token_name} " f"score={score:.3f} @ {x},{y}")
                 self._mark_action()
                 self.set_state(State.WAIT_CONGR)
