@@ -2,15 +2,17 @@ import threading
 from enum import IntEnum
 
 class Workflow(IntEnum):
-    TREASURE = 8
-    HQ       = 7
-    HEAL     = 6
-    DONATION = 5
-    MINISTRY = 4
-    FORZIERE = 3
-    GENERIC  = 2
-    RESEARCH = 1
-    RALLY    = 0
+    TREASURE = 10
+    HQ       = 9
+    HEAL     = 8
+    DONATION = 7
+    MINISTRY = 6
+    FORZIERE = 5
+    GENERIC  = 4
+    RESEARCH = 3
+    RALLY    = 2
+    HERO     = 1
+    BOUNTY   = 0
 
 class WorkflowManager:
     def __init__(self):
@@ -18,13 +20,13 @@ class WorkflowManager:
         self.active: Workflow | None = None
 
     def has_active(self) -> bool:
-        return self.active_workflow is not None
+        return self.active is not None
 
     def is_idle(self) -> bool:
-        return self.active_workflow is None
+        return self.active is None
 
     def current(self):
-        return self.active_workflow
+        return self.active
 
     def is_active(self, wf: Workflow) -> bool:
         return self.active == wf
@@ -37,14 +39,18 @@ class WorkflowManager:
             return self.active is None or self.active == wf
 
     def acquire(self, wf: Workflow) -> bool:
-        #print(f"[WF] acquire request {Workflow}")
         with self._lock:
-            if self.active is None or self.active <= wf:
+            # libero -> acquisisce
+            if self.active is None:
                 self.active = wf
                 return True
-            else:
-                #print(f"[WF] BLOCKED: {wf.name} → currently active: {self.active.name}")
-                return False
+    
+            # stesso workflow -> può continuare
+            if self.active == wf:
+                return True
+    
+            # qualsiasi altro workflow è già attivo -> aspetta
+            return False
 
     def release(self, wf: Workflow):
         #print(f"[WF] release {Workflow}")
