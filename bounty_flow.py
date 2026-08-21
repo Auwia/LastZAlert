@@ -177,8 +177,8 @@ class BountyFlow:
         h, w = img.shape[:2]
 
         # stessa zona usata dal tuo simply.py
-        x = int(w * 0.04)
-        y = int(h * 0.58)
+        x = w // 2
+        y = int(h * 0.95)
 
         self._adb_tap(x, y)
 
