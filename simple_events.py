@@ -46,6 +46,14 @@ SIMPLE_EVENTS = {
         "cooldown": 17,
         "log": "[CANCEL_POPUP]",
     },
+    "close_capital": {
+        "templates": "close_capital",
+        "roi": (0.0, 1.0, 0.0, 1.0),
+        "threshold": 0.85,
+        "cooldown": 15,
+        "tap": "bottom_center",
+        "log": "[CLOSE_CAPITAL]",
+    },
     #"electricity": {
     #    "templates": "electricity",
     #    "roi": (0.131, 0.610, 0.161, 0.439),
