@@ -274,8 +274,8 @@ class TreasureFlowSimplified:
                 return
     
             if self._seconds_in_state() > TIMEOUT_MAP_ICONS_SEC:
-                self.log(f"[WAIT_MAP_ICONS] timeout score={score:.3f}")
-                self.set_state(State.DONE)
+                self.log(f"[WAIT_MAP_ICONS] timeout score={score:.3f} -> provo WAIT_TOKEN")
+                self.set_state(State.WAIT_TOKEN)
             return
 
         if self.state == State.WAIT_TOKEN:
