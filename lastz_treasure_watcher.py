@@ -714,6 +714,10 @@ def simple_event_watcher_tick(stop_evt: threading.Event) -> None:
                 cx = img.shape[1] // 2
                 cy = img.shape[0] // 2
                 adb_tap(cx, cy)
+            elif tap_mode == "bottom_center":
+                cx = img.shape[1] // 2
+                cy = int(img.shape[0] * 0.95)
+                adb_tap(cx, cy)
             elif tap_mode == "bottom_right":
                 cx = int(img.shape[1] * 0.97)
                 cy = int(img.shape[0] * 0.97)
