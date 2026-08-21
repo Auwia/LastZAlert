@@ -12,9 +12,11 @@ import cv2
 import numpy as np
 import requests
 
+from bounty_flow import BountyFlow
 from donation_flow import DonationFlow
 from forziere_flow import ForziereFlow
 from heal_flow import HealFlow
+from hero_flow import HeroFlow
 from ministry_flow import MinistryFlow
 from rally_flow import RallyFlow, RALLY_TRIGGER_ROI
 from research_flow import ResearchFlow
@@ -37,6 +39,27 @@ DEBUG_SAVE_ROIS = False
 
 MINISTRY_ENABLED_PATH = os.path.join(BASE_DIR, "ministry_enabled.txt")
 RALLY_ENABLED_PATH = os.path.join(BASE_DIR, "rally_enabled.txt")
+
+# ============================================================
+# HERO SCHEDULE
+# lunedì / venerdì / domenica alle 03:50 localtime
+# ============================================================
+
+HERO_RUN_WEEKDAYS = {0, 4, 6}
+# datetime.weekday():
+# 0 = lunedì
+# 4 = venerdì
+# 6 = domenica
+
+HERO_RUN_HOUR = 3
+HERO_RUN_MINUTE = 50
+
+# Se alle 03:50 un altro workflow è attivo,
+# HERO ha fino alle 03:59 per partire appena il bot torna libero.
+HERO_START_WINDOW_MINUTES = 10
+
+# Memorizza l'ultimo giorno completato per evitare doppie esecuzioni.
+HERO_LAST_RUN_PATH = os.path.join(BASE_DIR, "hero_last_run.txt")
 
 ENABLE_MULTI_RESOURCE_COLLECTION = True
 
@@ -136,9 +159,11 @@ HQ_VIEW_TEMPLATES = []
 TREASURE_TEMPLATES = []
 
 flows = {
+    "bounty": None,
     "donation": None,
     "ministry": None,
     "forziere": None,
+    "hero": None,
     "research": None,
     "rally": None,
     "treasure": None,
@@ -551,6 +576,16 @@ def heal_tick(heal_flow: HealFlow) -> None:
 
     heal_flow.step(img)
 
+def bounty_tick() -> None:
+    flow = flows.get("bounty")
+    if flow is None:
+        return
+
+    with SCREENSHOT_LOCK:
+        img = load_image(SCREENSHOT_PATH)
+
+    if img is not None:
+        flow.step(img)
 
 def donation_tick() -> None:
     flow = flows.get("donation")
@@ -584,6 +619,17 @@ def forziere_tick() -> None:
     if img is not None:
         flow.step(img)
 
+
+def hero_tick() -> None:
+    flow = flows.get("hero")
+    if flow is None:
+        return
+
+    with SCREENSHOT_LOCK:
+        img = load_image(SCREENSHOT_PATH)
+
+    if img is not None:
+        flow.step(img)
 
 def research_tick() -> None:
     flow = flows.get("research")
@@ -676,6 +722,20 @@ def simple_event_watcher_tick(stop_evt: threading.Event) -> None:
                 cx, cy = tap_match_in_fullscreen(roi_coords, loc, hw)
 
             log_event(f"[SIMPLE EVENTS] TAP event={ev_name} @ {cx},{cy}")
+
+            if ev_name == "confirm_popup":
+                h, w = img.shape[:2]
+            
+                x = int(w * 0.92)
+                y = int(h * 0.945)
+            
+                time.sleep(1.0)
+                adb_tap(x, y)
+                time.sleep(1.0)
+                adb_tap(x, y)
+            
+                log_event(f"[SIMPLE EVENTS] CALIBRA dopo confirm_popup @ {x},{y}")
+
             _last_fire_simple_event[ev_name] = now
             _last_generic_fire = now
             hit = ev_name
@@ -835,9 +895,10 @@ def any_workflow_active() -> bool:
             Workflow.HEAL,
             Workflow.FORZIERE,
             Workflow.HQ,
+            Workflow.HERO,
+            Workflow.BOUNTY,
         )
     )
-
 
 def no_workflow_active() -> bool:
     return not any_workflow_active()
@@ -846,6 +907,53 @@ def no_workflow_active() -> bool:
 def can_start_common(flow: Workflow) -> bool:
     return WORKFLOW_MANAGER.can_run(flow) and no_workflow_active()
 
+
+def _hero_today_key(now=None) -> str:
+    now = now or datetime.now()
+    return now.strftime("%Y-%m-%d")
+
+
+def _hero_already_ran_today(now=None) -> bool:
+    today = _hero_today_key(now)
+
+    try:
+        with open(HERO_LAST_RUN_PATH, "r", encoding="utf-8") as f:
+            return f.read().strip() == today
+
+    except FileNotFoundError:
+        return False
+
+    except Exception as exc:
+        log_event(f"[HERO] errore lettura last-run: {exc}")
+        return False
+
+def _mark_hero_completed_today() -> None:
+    today = _hero_today_key()
+
+    try:
+        with open(HERO_LAST_RUN_PATH, "w", encoding="utf-8") as f:
+            f.write(today)
+
+        log_event(f"[HERO] run completato e marcato: {today}")
+
+    except Exception as exc:
+        log_event(f"[HERO] errore scrittura last-run: {exc}")
+
+
+def _hero_in_start_window(now=None) -> bool:
+    now = now or datetime.now()
+
+    if now.weekday() not in HERO_RUN_WEEKDAYS:
+        return False
+
+    now_minutes = now.hour * 60 + now.minute
+    start_minutes = HERO_RUN_HOUR * 60 + HERO_RUN_MINUTE
+
+    return (
+        start_minutes
+        <= now_minutes
+        < start_minutes + HERO_START_WINDOW_MINUTES
+    )
 
 def init_research_flow():
     try:
@@ -872,17 +980,48 @@ def load_runtime_templates() -> None:
 
 
 def init_flows():
+    flows["bounty"] = BountyFlow(log_event)
     flows["donation"] = DonationFlow(log_event)
     flows["ministry"] = MinistryFlow(
         log_fn=log_event,
         screenshot_ctx={"path": SCREENSHOT_PATH, "lock": SCREENSHOT_LOCK, "load_image": load_image},
     )
     flows["forziere"] = ForziereFlow(log_event)
+    flows["hero"] = HeroFlow(
+        log_event,
+        on_complete=_mark_hero_completed_today,
+    )
     flows["rally"] = RallyFlow(log_event)
     flows["treasure"] = TreasureFlowSimplified(log_event)
     flows["research"] = init_research_flow()
     return HealFlow(log_event)
 
+def maybe_trigger_bounty() -> None:
+    flow = flows.get("bounty")
+
+    if flow is None or flow.state.name != "IDLE":
+        return
+
+    if not can_start_common(Workflow.BOUNTY):
+        return
+
+    with SCREENSHOT_LOCK:
+        img = load_image(SCREENSHOT_PATH)
+
+    if img is None:
+        return
+
+    visible, name, score, coords, match_data = flow.is_bounty_visible(img)
+
+    if not visible:
+        return
+
+    log_event(
+        f"[BOUNTY] trigger visible "
+        f"{name} score={score:.3f}"
+    )
+
+    flow.trigger()
 
 def maybe_trigger_donation() -> None:
     global _last_donation_main_trigger
@@ -948,6 +1087,32 @@ def maybe_trigger_forziere() -> None:
         log_event(f"[FORZIERE-FLOW] trigger visibile score={score:.3f}")
         flow.trigger()
 
+def maybe_trigger_hero() -> None:
+    flow = flows.get("hero")
+
+    if flow is None or flow.state.name != "IDLE":
+        return
+
+    now = datetime.now()
+
+    # Solo lunedì / venerdì / domenica,
+    # nella finestra 03:50 -> 03:59.
+    if not _hero_in_start_window(now):
+        return
+
+    # Già completato oggi.
+    if _hero_already_ran_today(now):
+        return
+
+    # Deve iniziare solo quando nessun altro workflow è attivo.
+    if not can_start_common(Workflow.HERO):
+        return
+
+    if flow.trigger():
+        log_event(
+            f"[HERO] scheduled trigger -> "
+            f"{now.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
 
 def maybe_trigger_research() -> None:
     global _last_research_main_trigger
@@ -1007,6 +1172,12 @@ def main() -> None:
 
             if can_start_common(Workflow.GENERIC):
                 timed_tick("SIMPLE-EVENTS", simple_event_watcher_tick, stop_evt)
+
+            maybe_trigger_hero()
+            timed_tick("HERO", hero_tick)
+
+            maybe_trigger_bounty()
+            timed_tick("BOUNTY", bounty_tick)
 
             maybe_trigger_donation()
             timed_tick("DONATION", donation_tick)

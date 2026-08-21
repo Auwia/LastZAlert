@@ -151,14 +151,35 @@ def _parse_hhmmss(txt: str) -> Optional[int]:
     h, m_, s = map(int, m.group(1).split(":"))
     return h*3600 + m_*60 + s
 
-def _ocr_duration(img):
-    if img is None or img.size == 0:
+def _ocr_duration(roi):
+    if roi is None or roi.size == 0:
         return ""
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    gray = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY)[1]
-    config = "--psm 7 -c tessedit_char_whitelist=0123456789:"
-    return pytesseract.image_to_string(gray, config=config)
+
+    h, w = roi.shape[:2]
+
+    # ROI non valida: non chiamare Tesseract
+    if w < 10 or h < 10:
+        return ""
+
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+
+    _, gray = cv2.threshold(
+        gray,
+        150,
+        255,
+        cv2.THRESH_BINARY
+    )
+
+    config = "--psm 7"
+
+    try:
+        return pytesseract.image_to_string(
+            gray,
+            config=config
+        ).strip()
+    except pytesseract.TesseractError as exc:
+        print(f"[MINISTRY][OCR-DURATION] Tesseract error: {exc}")
+        return ""
 
 def _parse_application_note(txt: str) -> Optional[int]:
     txt = txt.strip()
