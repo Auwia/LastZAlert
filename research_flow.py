@@ -132,14 +132,29 @@ def sort_nodes_visual(nodes):
     return result
 
 def read_node_progress(img, node):
-    x, y, w, h = node["bbox"]
 
-    # il testo è nella parte bassa del nodo
-    y1 = y + int(h * 0.62)
-    y2 = y + h
+    cx = node["x"]
+    cy = node["y"]
 
-    x1 = max(0, x - 10)
-    x2 = min(img.shape[1], x + w + 10)
+    h_img, w_img = img.shape[:2]
+
+    # scala rispetto alla risoluzione reale 1080x2408
+    sx = w_img / 1080.0
+    sy = h_img / 2408.0
+
+    # zona stretta dove appare MAX / 6/10 / 7/10
+    half_w = int(80 * sx)
+
+    y1 = int(cy + 65 * sy)
+    y2 = int(cy + 130 * sy)
+
+    x1 = int(cx - half_w)
+    x2 = int(cx + half_w)
+
+    x1 = max(0, x1)
+    y1 = max(0, y1)
+    x2 = min(w_img, x2)
+    y2 = min(h_img, y2)
 
     roi = img[y1:y2, x1:x2]
 
@@ -151,51 +166,86 @@ def read_node_progress(img, node):
     gray = cv2.resize(
         gray,
         None,
-        fx=3,
-        fy=3,
+        fx=5,
+        fy=5,
         interpolation=cv2.INTER_CUBIC
     )
 
-    # testo chiaro su fondo scuro
-    _, bw = cv2.threshold(
+    variants = [gray]
+
+    _, otsu = cv2.threshold(
         gray,
         0,
         255,
         cv2.THRESH_BINARY + cv2.THRESH_OTSU
     )
+    variants.append(otsu)
 
-    txt = pytesseract.image_to_string(
-        bw,
-        config=(
-            "--psm 7 "
-            "-c tessedit_char_whitelist=MAX0123456789/"
-        )
+    _, inv = cv2.threshold(
+        gray,
+        0,
+        255,
+        cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
     )
+    variants.append(inv)
 
-    txt = txt.upper()
-    txt = txt.replace(" ", "")
-    txt = txt.replace("\n", "")
+    texts = []
 
-    if "MAX" in txt:
-        return {
-            "text": "MAX",
-            "current": 10,
-            "total": 10,
-            "max": True
-        }
+    for variant in variants:
 
-    m = re.search(r"(\d{1,2})/(\d{1,2})", txt)
+        txt = pytesseract.image_to_string(
+            variant,
+            config=(
+                "--psm 7 "
+                "-c tessedit_char_whitelist=MAX0123456789/"
+            )
+        )
 
-    if m:
-        current = int(m.group(1))
-        total = int(m.group(2))
+        txt = txt.upper()
+        txt = txt.replace(" ", "")
+        txt = txt.replace("\n", "")
+        txt = txt.replace("\x0c", "")
 
-        return {
-            "text": f"{current}/{total}",
-            "current": current,
-            "total": total,
-            "max": current >= total
-        }
+        if txt:
+            texts.append(txt)
+
+    if DEBUG:
+        print(
+            f"[RESEARCH][OCR] "
+            f"node={cx},{cy} "
+            f"roi=({x1},{y1})-({x2},{y2}) "
+            f"texts={texts}"
+        )
+
+    for txt in texts:
+
+        if "MAX" in txt:
+            return {
+                "text": "MAX",
+                "current": None,
+                "total": None,
+                "max": True
+            }
+
+        m = re.search(r"(\d{1,2})/(\d{1,2})", txt)
+
+        if m:
+            current = int(m.group(1))
+            total = int(m.group(2))
+
+            # evita OCR assurdi
+            if total <= 0:
+                continue
+
+            if current > total:
+                continue
+
+            return {
+                "text": f"{current}/{total}",
+                "current": current,
+                "total": total,
+                "max": current >= total
+            }
 
     return None
 
@@ -227,7 +277,7 @@ def detect_research_nodes(img):
 
     contours, _ = cv2.findContours(
         edges,
-        cv2.RETR_EXTERNAL,
+        cv2.RETR_LIST,
         cv2.CHAIN_APPROX_SIMPLE
     )
 
@@ -453,6 +503,8 @@ class ResearchFlow:
         # -----------------------------------------------------
 
         if self.state == ResearchState.TAP_CATEGORY:
+
+            time.sleep(5.0)
         
             if self.research_index >= len(self.research_priorities):
                 self.log("[RESEARCH] no research available in priorities")
@@ -464,7 +516,13 @@ class ResearchFlow:
                 self.research_priorities[self.research_index]
         
             name, score, loc, hw = match_any(img, templates)
-        
+
+            if DEBUG:
+                self.log(
+                    f"[RESEARCH] category check "
+                    f"{research_name} score={score:.3f}"
+                )
+
             if name and score >= THR:
         
                 adb_tap(
@@ -478,7 +536,7 @@ class ResearchFlow:
                     f"[RESEARCH] category opened: {research_name}"
                 )
         
-                time.sleep(1.5)
+                time.sleep(4)
         
                 self.state = ResearchState.SCAN_NODE
                 self._mark()
@@ -529,7 +587,10 @@ class ResearchFlow:
                         node["x"],
                         node["y"]
                     )
-            
+
+                    self.log("[RESEARCH] node tapped -> waiting popup")
+                    time.sleep(3.0)
+
                     self.state = ResearchState.START_RESEARCH
                     self._mark()
                     return
@@ -557,6 +618,12 @@ class ResearchFlow:
 
             name, score, loc, hw = match_any(img, self.templates["research"])
 
+            if DEBUG:
+                self.log(
+                    f"[RESEARCH] research button "
+                    f"name={name} score={score:.3f}"
+                )
+
             if name and score >= THR:
 
                 adb_tap(loc[0] + hw[1]//2, loc[1] + hw[0]//2)
@@ -571,12 +638,6 @@ class ResearchFlow:
                 self._mark()
                 return
 
-            # chiudi popup (max level ecc.)
-            adb_tap(50, 50)  # tap fuori popup
-            time.sleep(0.3)
-
-            # no research -> try next node
-            self.state = ResearchState.SCAN_NODE
             self._mark()
             return
 
