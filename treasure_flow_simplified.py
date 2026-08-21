@@ -28,7 +28,7 @@ CONGR_DIR = os.path.join(BASE_DIR, "congratulations")
 # =========================
 THR_CHAT = 0.70
 THR_CHAT_UI = 0.70
-THR_ICON = 0.70
+THR_ICON = 0.65
 THR_TOKEN = 0.81
 THR_CONGR = 0.73
 
@@ -48,8 +48,8 @@ WAIT_AFTER_ICON_TAP_SEC = 1.0
 WAIT_AFTER_TOKEN_TAP_SEC = 1.0
 
 TIMEOUT_CHAT_LINK_SEC = 80.0
-TIMEOUT_MAP_ICONS_SEC = 180.0
-TIMEOUT_TOKEN_SEC = 1800.0
+TIMEOUT_MAP_ICONS_SEC = 580.0
+TIMEOUT_TOKEN_SEC = 580.0
 TIMEOUT_CONGR_SEC = 55.0
 
 # =========================
@@ -289,7 +289,8 @@ class TreasureFlowSimplified:
                 self.state_enter_ts = time.time()
         
             if token_name is not None and score >= THR_TOKEN:
-                tap_match((0, 0, img.shape[1], img.shape[0]), loc, size)
+                x, y = tap_match((0, 0, img.shape[1], img.shape[0]), loc, size)
+                self.log(f"[WAIT_TOKEN] TAP token={token_name} " f"score={score:.3f} @ {x},{y}")
                 self._mark_action()
                 self.set_state(State.WAIT_CONGR)
                 return
