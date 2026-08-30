@@ -26,7 +26,7 @@ DRY_RUN = True
 
 # Hero icon nella vista HQ.
 # Coordinate frazionarie x/y.
-HQ_HERO_ICON_FRAC = (0.08, 0.90)
+HQ_HERO_ICON_XY = (90, 1945)
 
 # ------------------------------------------------------------
 # RICONOSCIMENTO GEOMETRICO CARD EROI
@@ -544,11 +544,16 @@ class HeroFlow:
         # 1. HQ -> schermata Heroes
         # --------------------------------------------------------
         if self.state == HeroState.OPEN_HEROES:
-            x, y = _tap_frac(img, HQ_HERO_ICON_FRAC)
-            self.log(f"[HERO-FLOW] tap hero icon @ {x},{y}")
-
+            x, y = HQ_HERO_ICON_XY
+        
+            adb_tap(x, y)
+        
+            self.log(
+                f"[HERO-FLOW] tap hero icon @ {x},{y}"
+            )
+        
             time.sleep(OPEN_HEROES_WAIT_SEC)
-
+        
             self.state = HeroState.SCAN_HEROES
             self._mark()
             return
