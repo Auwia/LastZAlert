@@ -37,6 +37,19 @@ DEBUG = False
 DEBUG_EVENTS_ONLY = True
 DEBUG_SAVE_ROIS = False
 
+# ============================================================
+# EXECUTION ENGINE
+# ============================================================
+
+# False = comportamento attuale
+# True  = nuovo motore sincronizzato agli screenshot
+ENABLE_SCREENSHOT_DRIVEN_ENGINE = True
+
+# Piccola pausa prima di acquisire il frame successivo.
+# In questa prima fase NON sostituisce gli sleep interni ai workflow.
+SCREENSHOT_DRIVEN_DELAY_SEC = 0.30
+# ============================================================
+
 MINISTRY_ENABLED_PATH = os.path.join(BASE_DIR, "ministry_enabled.txt")
 RALLY_ENABLED_PATH = os.path.join(BASE_DIR, "rally_enabled.txt")
 
@@ -141,6 +154,7 @@ _treasure_hits = 0
 _last_hq_action_ts = 0.0
 _last_donation_main_trigger = 0.0
 _last_research_main_trigger = 0.0
+_frame_counter = 0
 
 _perf_tick_stats = {}
 
@@ -440,6 +454,77 @@ def take_screenshot(path: str) -> bool:
         print("[SCREENSHOT] exception:", exc)
         return False
 
+def capture_fresh_frame():
+    """
+    Modalità screenshot-driven.
+
+    Esegue SINCRONAMENTE:
+        ADB screencap
+        -> scrittura file
+        -> cv2.imread
+        -> ritorno immagine
+
+    Quando questa funzione ritorna, img appartiene sicuramente
+    allo screenshot appena acquisito.
+    """
+    global SCREENSHOT_ERROR_COUNT, _frame_counter
+
+    tmp_path = SCREENSHOT_PATH + ".frame.tmp"
+
+    try:
+        proc = subprocess.run(
+            [ADB_CMD, "exec-out", "screencap", "-p"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+            check=False,
+        )
+
+        if proc.returncode != 0 or not proc.stdout:
+            err = proc.stderr.decode("utf-8", errors="ignore")
+
+            log_event(f"[FRAME] screencap failed: {err}")
+            SCREENSHOT_ERROR_COUNT += 1
+
+            if SCREENSHOT_ERROR_COUNT >= SCREENSHOT_ERROR_MAX:
+                log_event("[FRAME] troppi errori -> reset adb")
+                reset_adb()
+                SCREENSHOT_ERROR_COUNT = 0
+
+            return None
+
+        SCREENSHOT_ERROR_COUNT = 0
+
+        with open(tmp_path, "wb") as f:
+            f.write(proc.stdout)
+
+        with SCREENSHOT_LOCK:
+            os.replace(tmp_path, SCREENSHOT_PATH)
+            img = cv2.imread(SCREENSHOT_PATH, cv2.IMREAD_COLOR)
+
+        if img is None:
+            log_event("[FRAME] screenshot acquisito ma cv2.imread fallita")
+            return None
+
+        _frame_counter += 1
+
+        if DEBUG:
+            log_event(
+                f"[FRAME {_frame_counter:06d}] "
+                f"captured {img.shape[1]}x{img.shape[0]}"
+            )
+
+        return img
+
+    except subprocess.TimeoutExpired:
+        log_event("[FRAME] adb screencap TIMEOUT")
+        SCREENSHOT_ERROR_COUNT += 1
+        return None
+
+    except Exception as exc:
+        log_event(f"[FRAME] exception: {exc}")
+        SCREENSHOT_ERROR_COUNT += 1
+        return None
 
 def wait_new_frame(delay=0.6):
     time.sleep(delay)
@@ -492,7 +577,7 @@ def screenshot_producer(stop_evt: threading.Event) -> None:
 # FLOW TICKS
 # ============================================================
 
-def treasure_detect_tick(stop_evt: threading.Event) -> None:
+def treasure_detect_tick(stop_evt: threading.Event, img=None) -> None:
     global _last_treasure_scan_ts, _last_treasure_alert_ts, _treasure_hits
 
     if stop_evt.is_set() or not TREASURE_TEMPLATES:
@@ -503,8 +588,10 @@ def treasure_detect_tick(stop_evt: threading.Event) -> None:
         return
     _last_treasure_scan_ts = now_scan
 
-    with SCREENSHOT_LOCK:
-        img = load_image(SCREENSHOT_PATH)
+    if img is None:
+        with SCREENSHOT_LOCK:
+            img = load_image(SCREENSHOT_PATH)
+
     if img is None:
         return
 
@@ -537,21 +624,22 @@ def treasure_detect_tick(stop_evt: threading.Event) -> None:
     _last_treasure_alert_ts = now
     _treasure_hits = 0
 
-
-def treasure_flow_tick() -> None:
+def treasure_flow_tick(img=None) -> None:
     flow = flows.get("treasure")
     if flow is None:
         return
 
-    with SCREENSHOT_LOCK:
-        img = load_image(SCREENSHOT_PATH)
+    if img is None:
+        with SCREENSHOT_LOCK:
+            img = load_image(SCREENSHOT_PATH)
+
     if img is not None:
         flow.step(img)
 
-
-def heal_tick(heal_flow: HealFlow) -> None:
-    with SCREENSHOT_LOCK:
-        img = load_image(SCREENSHOT_PATH)
+def heal_tick(heal_flow: HealFlow, img=None) -> None:
+    if img is None:
+        with SCREENSHOT_LOCK:
+            img = load_image(SCREENSHOT_PATH)
     if img is None:
         return
 
@@ -576,79 +664,93 @@ def heal_tick(heal_flow: HealFlow) -> None:
 
     heal_flow.step(img)
 
-def bounty_tick() -> None:
+def bounty_tick(img=None) -> None:
     flow = flows.get("bounty")
     if flow is None:
         return
 
-    with SCREENSHOT_LOCK:
-        img = load_image(SCREENSHOT_PATH)
+    if img is None:
+        with SCREENSHOT_LOCK:
+            img = load_image(SCREENSHOT_PATH)
+    if img is None:
+        return
 
-    if img is not None:
-        flow.step(img)
+    flow.step(img)
 
-def donation_tick() -> None:
+def donation_tick(img=None) -> None:
     flow = flows.get("donation")
+
     if flow is None:
         return
 
-    with SCREENSHOT_LOCK:
-        img = load_image(SCREENSHOT_PATH)
-    if img is not None:
-        flow.step(img)
+    if img is None:
+        with SCREENSHOT_LOCK:
+            img = load_image(SCREENSHOT_PATH)
+    if img is None:
+        return
 
+    flow.step(img)
 
-def ministry_tick() -> None:
+def ministry_tick(img=None) -> None:
     flow = flows.get("ministry")
     if flow is None:
         return
 
-    with SCREENSHOT_LOCK:
-        img = load_image(SCREENSHOT_PATH)
-    if img is not None:
-        flow.step(img)
+    if img is None:
+        with SCREENSHOT_LOCK:
+            img = load_image(SCREENSHOT_PATH)
+    if img is None:
+        return
 
+    flow.step(img)
 
-def forziere_tick() -> None:
+def forziere_tick(img=None) -> None:
     flow = flows.get("forziere")
     if flow is None:
         return
 
-    with SCREENSHOT_LOCK:
-        img = load_image(SCREENSHOT_PATH)
-    if img is not None:
-        flow.step(img)
+    if img is None:
+        with SCREENSHOT_LOCK:
+            img = load_image(SCREENSHOT_PATH)
+    if img is None:
+        return
 
+    flow.step(img)
 
-def hero_tick() -> None:
+def hero_tick(img=None) -> None:
     flow = flows.get("hero")
     if flow is None:
         return
 
-    with SCREENSHOT_LOCK:
-        img = load_image(SCREENSHOT_PATH)
+    if img is None:
+        with SCREENSHOT_LOCK:
+            img = load_image(SCREENSHOT_PATH)
+    if img is None:
+        return
 
-    if img is not None:
-        flow.step(img)
+    flow.step(img)
 
-def research_tick() -> None:
+def research_tick(img=None) -> None:
     flow = flows.get("research")
     if flow is None:
         return
 
-    with SCREENSHOT_LOCK:
-        img = load_image(SCREENSHOT_PATH)
-    if img is not None:
-        flow.step(img)
+    if img is None:
+        with SCREENSHOT_LOCK:
+            img = load_image(SCREENSHOT_PATH)
+    if img is None:
+        return
 
+    flow.step(img)
 
-def rally_tick() -> None:
+def rally_tick(img=None) -> None:
     flow = flows.get("rally")
     if flow is None:
         return
 
-    with SCREENSHOT_LOCK:
-        img = load_image(SCREENSHOT_PATH)
+    if img is None:
+        with SCREENSHOT_LOCK:
+            img = load_image(SCREENSHOT_PATH)
     if img is None:
         return
 
@@ -661,7 +763,7 @@ def rally_tick() -> None:
 # SIMPLE EVENTS / HQ / MINISTRY HELPERS
 # ============================================================
 
-def simple_event_watcher_tick(stop_evt: threading.Event) -> None:
+def simple_event_watcher_tick(stop_evt: threading.Event, img=None) -> bool:
     global _simple_event_templates, _last_fire_simple_event, _last_generic_fire, _last_multi_resource_time
 
     if not _simple_event_templates:
@@ -682,8 +784,10 @@ def simple_event_watcher_tick(stop_evt: threading.Event) -> None:
 
     hit = None
     try:
-        with SCREENSHOT_LOCK:
-            img = load_image(SCREENSHOT_PATH)
+        if img is None:
+            with SCREENSHOT_LOCK:
+                img = load_image(SCREENSHOT_PATH)
+        
         if img is None:
             return
 
@@ -750,6 +854,8 @@ def simple_event_watcher_tick(stop_evt: threading.Event) -> None:
         if hit is not None:
             time.sleep(0.3)
 
+    return hit is not None
+
 
 def _ensure_hq_lock() -> bool:
     if WORKFLOW_MANAGER.is_active(Workflow.HQ):
@@ -757,7 +863,7 @@ def _ensure_hq_lock() -> bool:
     return WORKFLOW_MANAGER.acquire(Workflow.HQ)
 
 
-def hq_upgrade_watcher_tick(stop_evt: threading.Event) -> None:
+def hq_upgrade_watcher_tick(stop_evt: threading.Event, img=None) -> None:
     global _hq_templates, _last_hq_action_ts
 
     if _hq_templates is None:
@@ -769,8 +875,10 @@ def hq_upgrade_watcher_tick(stop_evt: threading.Event) -> None:
     if stop_evt.is_set():
         return
 
-    with SCREENSHOT_LOCK:
-        img = load_image(SCREENSHOT_PATH)
+    if img is None:
+        with SCREENSHOT_LOCK:
+            img = load_image(SCREENSHOT_PATH)
+    
     if img is None:
         return
 
@@ -1000,7 +1108,7 @@ def init_flows():
     flows["research"] = init_research_flow()
     return HealFlow(log_event)
 
-def maybe_trigger_bounty() -> None:
+def maybe_trigger_bounty(img=None) -> None:
     flow = flows.get("bounty")
 
     if flow is None or flow.state.name != "IDLE":
@@ -1009,9 +1117,9 @@ def maybe_trigger_bounty() -> None:
     if not can_start_common(Workflow.BOUNTY):
         return
 
-    with SCREENSHOT_LOCK:
-        img = load_image(SCREENSHOT_PATH)
-
+    if img is None:
+        with SCREENSHOT_LOCK:
+            img = load_image(SCREENSHOT_PATH)
     if img is None:
         return
 
@@ -1045,7 +1153,7 @@ def maybe_trigger_donation() -> None:
     flow.trigger()
 
 
-def maybe_trigger_ministry() -> None:
+def maybe_trigger_ministry(img=None) -> None:
     if not flow_enabled(MINISTRY_ENABLED_PATH):
         return
 
@@ -1057,8 +1165,9 @@ def maybe_trigger_ministry() -> None:
     if not can_start_common(Workflow.MINISTRY):
         return
 
-    wait_new_frame(0.5)
-    img = load_image(SCREENSHOT_PATH)
+    if img is None:
+        with SCREENSHOT_LOCK:
+            img = load_image(SCREENSHOT_PATH)
     if img is None:
         return
 
@@ -1075,14 +1184,16 @@ def maybe_trigger_ministry() -> None:
     flow.trigger()
 
 
-def maybe_trigger_forziere() -> None:
+def maybe_trigger_forziere(img=None) -> None:
     flow = flows.get("forziere")
     if flow is None or flow.state.name != "IDLE":
         return
     if not can_start_common(Workflow.FORZIERE):
         return
 
-    img = load_image(SCREENSHOT_PATH)
+    if img is None:
+        with SCREENSHOT_LOCK:
+            img = load_image(SCREENSHOT_PATH)
     if img is None:
         return
 
@@ -1134,7 +1245,7 @@ def maybe_trigger_research() -> None:
     flow.trigger()
 
 
-def maybe_trigger_rally() -> None:
+def maybe_trigger_rally(img=None) -> None:
     if not flow_enabled(RALLY_ENABLED_PATH):
         return
 
@@ -1144,7 +1255,9 @@ def maybe_trigger_rally() -> None:
     if not can_start_common(Workflow.RALLY):
         return
 
-    img = load_image(SCREENSHOT_PATH)
+    if img is None:
+        with SCREENSHOT_LOCK:
+            img = load_image(SCREENSHOT_PATH)
     if img is None:
         return
 
@@ -1153,6 +1266,232 @@ def maybe_trigger_rally() -> None:
     if score >= 0.80:
         flow.trigger()
 
+def screenshot_driven_run_active_workflow(
+    stop_evt: threading.Event,
+    heal_flow: HealFlow,
+    img
+) -> bool:
+    """
+    Se esiste un workflow attivo, esegue SOLO quello
+    usando il frame corrente.
+
+    Return:
+        True  -> esisteva un workflow attivo
+        False -> nessun workflow attivo
+    """
+
+    active = WORKFLOW_MANAGER.current()
+
+    if active is None:
+        return False
+
+    if DEBUG:
+        log_event(
+            f"[FRAME {_frame_counter:06d}] "
+            f"active workflow={active.name}"
+        )
+
+    if active == Workflow.TREASURE:
+        timed_tick("TREASURE-FLOW", treasure_flow_tick, img)
+
+    elif active == Workflow.HEAL:
+        timed_tick("HEAL", heal_tick, heal_flow, img)
+
+    elif active == Workflow.HQ:
+        timed_tick("HQ-UPGRADE", hq_upgrade_watcher_tick, stop_evt, img)
+
+    elif active == Workflow.HERO:
+        timed_tick("HERO", hero_tick, img)
+
+    elif active == Workflow.BOUNTY:
+        timed_tick("BOUNTY", bounty_tick, img)
+
+    elif active == Workflow.DONATION:
+        timed_tick("DONATION", donation_tick, img)
+
+    elif active == Workflow.MINISTRY:
+        timed_tick("MINISTRY", ministry_tick, img)
+
+    elif active == Workflow.FORZIERE:
+        timed_tick("FORZIERE", forziere_tick, img)
+
+    elif active == Workflow.RESEARCH:
+        timed_tick("RESEARCH", research_tick, img)
+
+    elif active == Workflow.RALLY:
+        timed_tick("RALLY", rally_tick, img)
+
+    return True
+
+def run_screenshot_driven_engine(
+    stop_evt: threading.Event,
+    heal_flow: HealFlow
+) -> None:
+
+    log_event("[ENGINE] SCREENSHOT-DRIVEN enabled")
+
+    while not stop_evt.is_set():
+
+        # ====================================================
+        # 1. NUOVO FRAME
+        # ====================================================
+
+        img = capture_fresh_frame()
+
+        if img is None:
+            time.sleep(0.5)
+            continue
+
+        # ====================================================
+        # 2. SE ESISTE UN WF ATTIVO,
+        #    SOLO QUEL WF PUÒ USARE QUESTO FRAME
+        # ====================================================
+
+        if screenshot_driven_run_active_workflow(
+            stop_evt,
+            heal_flow,
+            img
+        ):
+            time.sleep(SCREENSHOT_DRIVEN_DELAY_SEC)
+            continue
+
+        # ====================================================
+        # 3. NESSUN WF ATTIVO:
+        #    SCANSIONE SEQUENZIALE
+        # ====================================================
+
+        timed_tick(
+            "TREASURE-DETECT",
+            treasure_detect_tick,
+            stop_evt,
+            img
+        )
+
+        if any_workflow_active():
+            time.sleep(SCREENSHOT_DRIVEN_DELAY_SEC)
+            continue
+
+
+        timed_tick(
+            "HEAL",
+            heal_tick,
+            heal_flow,
+            img
+        )
+
+        if any_workflow_active():
+            time.sleep(SCREENSHOT_DRIVEN_DELAY_SEC)
+            continue
+
+
+        timed_tick(
+            "HQ-UPGRADE",
+            hq_upgrade_watcher_tick,
+            stop_evt,
+            img
+        )
+
+        if any_workflow_active():
+            time.sleep(SCREENSHOT_DRIVEN_DELAY_SEC)
+            continue
+
+
+        if can_start_common(Workflow.GENERIC):
+            simple_event_action = timed_tick(
+                "SIMPLE-EVENTS",
+                simple_event_watcher_tick,
+                stop_evt,
+                img
+            )
+
+            if simple_event_action:
+                time.sleep(SCREENSHOT_DRIVEN_DELAY_SEC)
+                continue
+
+        #
+        # ATTENZIONE:
+        # Generic può acquisire e rilasciare il lock
+        # tutto dentro lo stesso tick.
+        #
+        # In questa prima versione lasciamo quindi
+        # Simple Events invariato.
+        # Lo renderemo "action-aware" nella fase 2.
+        #
+
+
+        maybe_trigger_hero()
+
+        if any_workflow_active():
+            continue
+
+        timed_tick("HERO", hero_tick, img)
+
+        if any_workflow_active():
+            continue
+
+
+        maybe_trigger_bounty(img)
+
+        if any_workflow_active():
+            continue
+
+        timed_tick("BOUNTY", bounty_tick, img)
+
+        if any_workflow_active():
+            continue
+
+
+        maybe_trigger_donation()
+
+        if any_workflow_active():
+            continue
+
+        timed_tick("DONATION", donation_tick, img)
+
+        if any_workflow_active():
+            continue
+
+
+        maybe_trigger_ministry(img)
+
+        if any_workflow_active():
+            continue
+
+        timed_tick("MINISTRY", ministry_tick, img)
+
+        if any_workflow_active():
+            continue
+
+
+        maybe_trigger_forziere(img)
+
+        if any_workflow_active():
+            continue
+
+        timed_tick("FORZIERE", forziere_tick, img)
+
+        if any_workflow_active():
+            continue
+
+
+        maybe_trigger_research()
+
+        if any_workflow_active():
+            continue
+
+        timed_tick("RESEARCH", research_tick, img)
+
+        if any_workflow_active():
+            continue
+
+
+        maybe_trigger_rally(img)
+
+        if any_workflow_active():
+            continue
+
+
+        time.sleep(SCREENSHOT_DRIVEN_DELAY_SEC)
 
 def main() -> None:
     print("=== Last Z Bot (sequential clean) ===")
@@ -1173,75 +1512,118 @@ def main() -> None:
 
     stop_evt = threading.Event()
 
-    # Avvia SOLO il produttore degli screenshot
-    threading.Thread(
-        target=screenshot_producer,
-        args=(stop_evt,),
-        daemon=True
-    ).start()
-
-    # --------------------------------------------------------
-    # NON avviare nessun workflow finché non abbiamo
-    # realmente il primo screenshot nuovo
-    # --------------------------------------------------------
-    log_event("[STARTUP] attendo primo screenshot nuovo...")
-
-    while not stop_evt.is_set():
-        if os.path.exists(SCREENSHOT_PATH):
-            with SCREENSHOT_LOCK:
-                img = cv2.imread(SCREENSHOT_PATH, cv2.IMREAD_COLOR)
-
-            if img is not None:
-                log_event("[STARTUP] primo screenshot pronto -> avvio bot")
-                break
-
-        time.sleep(0.1)
+    if not ENABLE_SCREENSHOT_DRIVEN_ENGINE:
+    
+        # ========================================================
+        # LEGACY ENGINE
+        # ========================================================
+    
+        threading.Thread(
+            target=screenshot_producer,
+            args=(stop_evt,),
+            daemon=True
+        ).start()
+    
+        log_event("[STARTUP] LEGACY engine -> attendo primo screenshot nuovo...")
+    
+        while not stop_evt.is_set():
+            if os.path.exists(SCREENSHOT_PATH):
+                with SCREENSHOT_LOCK:
+                    img = cv2.imread(
+                        SCREENSHOT_PATH,
+                        cv2.IMREAD_COLOR
+                    )
+    
+                if img is not None:
+                    log_event("[STARTUP] primo screenshot pronto -> avvio bot")
+                    break
+    
+            time.sleep(0.1)
+    
+    else:
+    
+        log_event(
+            "[STARTUP] SCREENSHOT-DRIVEN engine -> "
+            "nessun producer asincrono"
+        )
 
     # SOLO ORA inizializziamo i flow
     heal_flow = init_flows()
 
     try:
-        while not stop_evt.is_set():
-            timed_tick("TREASURE-DETECT", treasure_detect_tick, stop_evt)
-            timed_tick("TREASURE-FLOW", treasure_flow_tick)
-
-            timed_tick("HEAL", heal_tick, heal_flow)
-            timed_tick("HQ-UPGRADE", hq_upgrade_watcher_tick, stop_evt)
-
-            if can_start_common(Workflow.GENERIC):
-                timed_tick("SIMPLE-EVENTS", simple_event_watcher_tick, stop_evt)
-
-            maybe_trigger_hero()
-            timed_tick("HERO", hero_tick)
-
-            maybe_trigger_bounty()
-            timed_tick("BOUNTY", bounty_tick)
-
-            maybe_trigger_donation()
-            timed_tick("DONATION", donation_tick)
-
-            maybe_trigger_ministry()
-            timed_tick("MINISTRY", ministry_tick)
-
-            maybe_trigger_forziere()
-            timed_tick("FORZIERE", forziere_tick)
-
-            maybe_trigger_research()
-            timed_tick("RESEARCH", research_tick)
-
-            maybe_trigger_rally()
-            if WORKFLOW_MANAGER.is_active(Workflow.RALLY):
-                timed_tick("RALLY", rally_tick)
-                time.sleep(0.05)
-                continue
-
-            time.sleep(MAIN_LOOP_ACTIVE_SLEEP_SEC if any_workflow_active() else MAIN_LOOP_IDLE_SLEEP_SEC)
+        if ENABLE_SCREENSHOT_DRIVEN_ENGINE:
+            run_screenshot_driven_engine(
+                stop_evt,
+                heal_flow
+            )
+        else:
+            while not stop_evt.is_set():
+                timed_tick(
+                    "TREASURE-DETECT",
+                    treasure_detect_tick,
+                    stop_evt
+                )
+                timed_tick(
+                    "TREASURE-FLOW",
+                    treasure_flow_tick
+                )
+    
+                timed_tick(
+                    "HEAL",
+                    heal_tick,
+                    heal_flow
+                )
+    
+                timed_tick(
+                    "HQ-UPGRADE",
+                    hq_upgrade_watcher_tick,
+                    stop_evt
+                )
+    
+                if can_start_common(Workflow.GENERIC):
+                    timed_tick(
+                        "SIMPLE-EVENTS",
+                        simple_event_watcher_tick,
+                        stop_evt
+                    )
+    
+                maybe_trigger_hero()
+                timed_tick("HERO", hero_tick)
+    
+                maybe_trigger_bounty()
+                timed_tick("BOUNTY", bounty_tick)
+    
+                maybe_trigger_donation()
+                timed_tick("DONATION", donation_tick)
+    
+                maybe_trigger_ministry()
+                timed_tick("MINISTRY", ministry_tick)
+    
+                maybe_trigger_forziere()
+                timed_tick("FORZIERE", forziere_tick)
+    
+                maybe_trigger_research()
+                timed_tick("RESEARCH", research_tick)
+    
+                maybe_trigger_rally()
+    
+                if WORKFLOW_MANAGER.is_active(Workflow.RALLY):
+                    timed_tick("RALLY", rally_tick)
+                    time.sleep(0.05)
+                    continue
+    
+                time.sleep(
+                    MAIN_LOOP_ACTIVE_SLEEP_SEC
+                    if any_workflow_active()
+                    else MAIN_LOOP_IDLE_SLEEP_SEC
+                )
 
     except KeyboardInterrupt:
         print("\n[!] Stop richiesto.")
         stop_evt.set()
-        time.sleep(1)
-
+    
+        if not ENABLE_SCREENSHOT_DRIVEN_ENGINE:
+            time.sleep(1)
 
 if __name__ == "__main__":
     main()

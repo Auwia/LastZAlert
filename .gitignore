@@ -208,5 +208,5 @@ __marimo__/
 
 AndroidScreenshots
 debug
-ocr
-testdata
+
+*.txt
