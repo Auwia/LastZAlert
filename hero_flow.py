@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import os
 import re
 import subprocess
 import time
@@ -18,7 +19,10 @@ from bot_utils import adb_tap
 # CONFIG
 # ============================================================
 
-DEBUG = False
+DEBUG = True
+
+DEBUG_DIR = "debug/hero"
+os.makedirs(DEBUG_DIR, exist_ok=True)
 
 # True = esegue tutto il flow ma NON preme realmente Upgrade.
 # False = i 5 tap su Upgrade vengono eseguiti davvero.
@@ -26,7 +30,7 @@ DRY_RUN = True
 
 # Hero icon nella vista HQ.
 # Coordinate frazionarie x/y.
-HQ_HERO_ICON_XY = (90, 1945)
+HQ_HERO_ICON_FRAC = (0.098, 0.950)
 
 # ------------------------------------------------------------
 # RICONOSCIMENTO GEOMETRICO CARD EROI
@@ -185,7 +189,28 @@ def detect_hero_cards(img):
         cv2.CHAIN_APPROX_SIMPLE,
     )
 
+    if DEBUG:
+        cv2.imwrite(
+            os.path.join(DEBUG_DIR, "03_edges.png"),
+            edges
+        )
+    
+        print(
+            f"[HERO-DEBUG][CARDS] "
+            f"screen={w_img}x{h_img} "
+            f"contours={len(contours)} "
+            f"expected_w={min_w}-{max_w} "
+            f"expected_h={min_h}-{max_h} "
+            f"y={y_min}-{y_max}"
+        )
+
     candidates = []
+
+    reject_vertices = 0
+    reject_width = 0
+    reject_height = 0
+    reject_y = 0
+    reject_ratio = 0
 
     for cnt in contours:
         peri = cv2.arcLength(cnt, True)
@@ -202,21 +227,26 @@ def detect_hero_cards(img):
         # perché cornice/immagine possono produrre 4-8 vertici.
         vertices = len(approx)
         if vertices < 4 or vertices > 8:
+            reject_vertices += 1
             continue
 
         x, y, w, h = cv2.boundingRect(approx)
 
         if w < min_w or w > max_w:
+            reject_width += 1
             continue
 
         if h < min_h or h > max_h:
+            reject_height += 1
             continue
 
         if y < y_min or y > y_max:
+            reject_y += 1
             continue
 
         ratio = w / float(h)
         if ratio < HERO_CARD_RATIO_MIN or ratio > HERO_CARD_RATIO_MAX:
+            reject_ratio += 1
             continue
 
         candidates.append(
@@ -255,6 +285,45 @@ def detect_hero_cards(img):
 
         if not duplicate:
             cards.append(cand)
+
+    if DEBUG:
+        dbg = img.copy()
+        
+        for i, card in enumerate(cards, start=1):
+            x, y, w, h = card["bbox"]
+        
+            cv2.rectangle(
+                dbg,
+                (x, y),
+                (x + w, y + h),
+                (0, 255, 0),
+                3
+            )
+        
+            cv2.putText(
+                dbg,
+                str(i),
+                (x + 5, y + 25),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 255, 0),
+                2
+            )
+        
+        cv2.imwrite(
+            os.path.join(DEBUG_DIR, "04_cards.png"),
+            dbg
+        )
+        
+        print(
+            f"[HERO-DEBUG][CARDS] "
+            f"accepted={len(cards)} "
+            f"reject_vertices={reject_vertices} "
+            f"reject_width={reject_width} "
+            f"reject_height={reject_height} "
+            f"reject_y={reject_y} "
+            f"reject_ratio={reject_ratio}"
+        )
 
     return cards
 
@@ -544,7 +613,34 @@ class HeroFlow:
         # 1. HQ -> schermata Heroes
         # --------------------------------------------------------
         if self.state == HeroState.OPEN_HEROES:
-            x, y = HQ_HERO_ICON_XY
+            h, w = img.shape[:2]
+        
+            x = int(w * HQ_HERO_ICON_FRAC[0])
+            y = int(h * HQ_HERO_ICON_FRAC[1])
+        
+            self.log(
+                f"[HERO-DEBUG] OPEN_HEROES "
+                f"screen={w}x{h} "
+                f"frac={HQ_HERO_ICON_FRAC} "
+                f"tap={x},{y}"
+            )
+        
+            if DEBUG:
+                dbg = img.copy()
+        
+                cv2.drawMarker(
+                    dbg,
+                    (x, y),
+                    (0, 0, 255),
+                    markerType=cv2.MARKER_CROSS,
+                    markerSize=60,
+                    thickness=4,
+                )
+        
+                cv2.imwrite(
+                    os.path.join(DEBUG_DIR, "01_hero_tap.png"),
+                    dbg
+                )
         
             adb_tap(x, y)
         
@@ -562,6 +658,20 @@ class HeroFlow:
         # 2. OCR livelli / eventuale scroll
         # --------------------------------------------------------
         if self.state == HeroState.SCAN_HEROES:
+            if DEBUG:
+                h, w = img.shape[:2]
+            
+                self.log(
+                    f"[HERO-DEBUG] SCAN_HEROES "
+                    f"screen={w}x{h} "
+                    f"scroll={self.scroll_count} "
+                    f"previous_level={self.previous_level}"
+                )
+            
+                cv2.imwrite(
+                    os.path.join(DEBUG_DIR, "02_scan_screen.png"),
+                    img
+                )
 
             current_signature = _grid_signature(img)
 

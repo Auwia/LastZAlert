@@ -1229,19 +1229,54 @@ def maybe_trigger_hero() -> None:
             f"{now.strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
-def maybe_trigger_research() -> None:
+def maybe_trigger_research(img=None) -> None:
     global _last_research_main_trigger
 
     flow = flows.get("research")
-    now = time.time()
+
     if flow is None or flow.state.name != "IDLE":
         return
-    if now - _last_research_main_trigger < RESEARCH_MAIN_COOLDOWN_SEC:
-        return
+
     if not can_start_common(Workflow.RESEARCH):
         return
 
+    if img is None:
+        with SCREENSHOT_LOCK:
+            img = load_image(SCREENSHOT_PATH)
+
+    if img is None:
+        return
+
+    # --------------------------------------------------------
+    # Research parte SOLO se:
+    # A) è presente la signorina
+    # oppure
+    # B) è presente direttamente la provetta
+    # --------------------------------------------------------
+
+    entry = flow.entry_status(img)
+
+    if not entry["start_ok"] and not entry["lab_ok"]:
+        return
+
+    now = time.time()
+
+    if now - _last_research_main_trigger < RESEARCH_MAIN_COOLDOWN_SEC:
+        return
+
     _last_research_main_trigger = now
+
+    if entry["start_ok"]:
+        log_event(
+            f"[RESEARCH] trigger: START/lady detected "
+            f"score={entry['start_score']:.3f}"
+        )
+    else:
+        log_event(
+            f"[RESEARCH] trigger: LAB/test-tube detected "
+            f"score={entry['lab_score']:.3f}"
+        )
+
     flow.trigger()
 
 
@@ -1473,8 +1508,7 @@ def run_screenshot_driven_engine(
         if any_workflow_active():
             continue
 
-
-        maybe_trigger_research()
+        maybe_trigger_research(img)
 
         if any_workflow_active():
             continue
@@ -1602,7 +1636,7 @@ def main() -> None:
                 maybe_trigger_forziere()
                 timed_tick("FORZIERE", forziere_tick)
     
-                maybe_trigger_research()
+                maybe_trigger_research(img)
                 timed_tick("RESEARCH", research_tick)
     
                 maybe_trigger_rally()

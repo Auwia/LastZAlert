@@ -17,7 +17,19 @@ from bot_utils import load_templates, match_any, adb_tap
 # ============================================================
 
 DEBUG = False
+
+SCAN_RETRY_MAX = 3
+SCAN_RETRY_WAIT = 2.5
+
 THR = 0.75
+
+
+THR_START = 0.75
+THR_LAB = 0.75
+
+LAB_RETRY_MAX = 5
+LAB_RETRY_WAIT = 1.0
+
 THR_RECOMMENDED = 0.56
 ACTION_COOLDOWN = 1.0
 STALL_TIMEOUT = 40
@@ -345,8 +357,6 @@ class ResearchFlow:
         self.lab_opened = False
         self.is_wednesday_mode = False
 
-        self.node_index = 0
-
         self.templates = {
             "start": load_templates("research/start.png"),
             "lab": load_templates("research/lab_icon.png"),
@@ -366,9 +376,59 @@ class ResearchFlow:
         self.research_index = 0
         self.current_research = None
 
+        self.scan_retry = 0
+        self.lab_retry = 0
+
         self.log("[RESEARCH-FLOW] initialized")
 
     # ---------------------------------------------------------
+
+    def entry_status(self, img):
+        """
+        Ritorna lo stato di ingresso Research.
+    
+        start = icona signorina
+        lab   = icona provetta
+        """
+    
+        start_name, start_score, start_loc, start_hw = match_any(
+            img,
+            self.templates["start"]
+        )
+    
+        lab_name, lab_score, lab_loc, lab_hw = match_any(
+            img,
+            self.templates["lab"]
+        )
+    
+        start_ok = (
+            start_name is not None
+            and start_score >= THR_START
+        )
+    
+        lab_ok = (
+            lab_name is not None
+            and lab_score >= THR_LAB
+        )
+    
+        if DEBUG:
+            self.log(
+                f"[RESEARCH][ENTRY] "
+                f"start={start_score:.3f} ok={start_ok} | "
+                f"lab={lab_score:.3f} ok={lab_ok}"
+            )
+    
+        return {
+            "start_ok": start_ok,
+            "start_score": start_score,
+            "start_loc": start_loc,
+            "start_hw": start_hw,
+    
+            "lab_ok": lab_ok,
+            "lab_score": lab_score,
+            "lab_loc": lab_loc,
+            "lab_hw": lab_hw,
+        }
 
     def _is_wednesday_window(self, now=None):
         now = now or datetime.now()
@@ -457,55 +517,158 @@ class ResearchFlow:
         # -----------------------------------------------------
 
         if self.state == ResearchState.FIND_START:
-
-            name, score, loc, hw = match_any(img, self.templates["start"])
-            if DEBUG:
-                self.log(f"[RESEARCH] start score={score:.3f}")
-
-            if name and score >= THR:
-                adb_tap(loc[0] + hw[1]//2, loc[1] + hw[0]//2)
-                self.lab_opened = True
-                self.log("[RESEARCH] start tapped")
-
+        
+            entry = self.entry_status(img)
+        
+            # ========================================================
+            # CASO A
+            # Signorina presente
+            # ========================================================
+        
+            if entry["start_ok"]:
+        
+                loc = entry["start_loc"]
+                hw = entry["start_hw"]
+        
+                adb_tap(
+                    loc[0] + hw[1] // 2,
+                    loc[1] + hw[0] // 2
+                )
+        
+                self.log(
+                    f"[RESEARCH] start/lady tapped "
+                    f"score={entry['start_score']:.3f}"
+                )
+        
                 if self.notify:
-                    self.notify("🔬 Ricerca completata / laboratorio libero rilevato!")
-
-                time.sleep(1)
-
-            else:
-                if DEBUG:
-                    self.log("[RESEARCH] start not found -> continue")
-
-            self.state = ResearchState.TAP_LAB
-            self._mark()
+                    self.notify(
+                        "🔬 Ricerca completata / laboratorio libero rilevato!"
+                    )
+        
+                self.lab_retry = 0
+        
+                # adesso aspettiamo che compaia la provetta
+                self.state = ResearchState.TAP_LAB
+                self._mark()
+                return
+        
+        
+            # ========================================================
+            # CASO B
+            # Signorina non presente, ma provetta già presente
+            # ========================================================
+        
+            if entry["lab_ok"]:
+        
+                loc = entry["lab_loc"]
+                hw = entry["lab_hw"]
+        
+                adb_tap(
+                    loc[0] + hw[1] // 2,
+                    loc[1] + hw[0] // 2
+                )
+        
+                self.log(
+                    f"[RESEARCH] lab/test-tube tapped directly "
+                    f"score={entry['lab_score']:.3f}"
+                )
+        
+                if self.notify:
+                    self.notify(
+                        "🔬 Laboratorio libero rilevato!"
+                    )
+        
+                # ORA siamo davvero entrati nel Lab
+                self.lab_opened = True
+        
+                self.research_index = 0
+                self.scan_retry = 0
+        
+                time.sleep(2)
+        
+                self.state = ResearchState.TAP_CATEGORY
+                self._mark()
+                return
+        
+        
+            # In teoria il MAIN non dovrebbe mai farci arrivare qui.
+            self.log(
+                "[RESEARCH] entry icons disappeared -> exit"
+            )
+        
+            self._do_exit()
             return
 
         # -----------------------------------------------------
 
         if self.state == ResearchState.TAP_LAB:
-
-            name, score, loc, hw = match_any(img, self.templates["lab"])
-
-            if name and score >= THR:
-                adb_tap(loc[0] + hw[1]//2, loc[1] + hw[0]//2)
-                self.log("[RESEARCH] lab tapped")
-                time.sleep(2)
+        
+            name, score, loc, hw = match_any(
+                img,
+                self.templates["lab"]
+            )
+        
+            if DEBUG:
+                self.log(
+                    f"[RESEARCH] waiting lab/test-tube "
+                    f"score={score:.3f} "
+                    f"retry={self.lab_retry}/{LAB_RETRY_MAX}"
+                )
+        
+            if name and score >= THR_LAB:
+        
+                adb_tap(
+                    loc[0] + hw[1] // 2,
+                    loc[1] + hw[0] // 2
+                )
+        
+                self.log(
+                    f"[RESEARCH] lab tapped score={score:.3f}"
+                )
+        
+                # siamo davvero entrati nel Lab
+                self.lab_opened = True
+        
+                self.lab_retry = 0
                 self.research_index = 0
+                self.scan_retry = 0
+        
+                time.sleep(2)
+        
                 self.state = ResearchState.TAP_CATEGORY
                 self._mark()
-            else:
-                if DEBUG:
-                    self.log("[RESEARCH] lab not found -> exit")
-                self._do_exit()
+                return
+        
+        
+            # provetta non ancora comparsa
+            self.lab_retry += 1
+        
+            if self.lab_retry < LAB_RETRY_MAX:
+        
+                self.log(
+                    f"[RESEARCH] lab not visible yet -> "
+                    f"retry {self.lab_retry}/{LAB_RETRY_MAX}"
+                )
+        
+                time.sleep(LAB_RETRY_WAIT)
+        
                 self._mark()
+                return
+        
+        
+            self.log(
+                f"[RESEARCH] lab not found after "
+                f"{LAB_RETRY_MAX} attempts -> exit"
+            )
+        
+            self.lab_retry = 0
+            self._do_exit()
             return
 
         # -----------------------------------------------------
 
         if self.state == ResearchState.TAP_CATEGORY:
 
-            time.sleep(5.0)
-        
             if self.research_index >= len(self.research_priorities):
                 self.log("[RESEARCH] no research available in priorities")
                 self.state = ResearchState.EXIT
@@ -531,6 +694,7 @@ class ResearchFlow:
                 )
         
                 self.current_research = research_name
+                self.scan_retry = 0
         
                 self.log(
                     f"[RESEARCH] category opened: {research_name}"
@@ -555,62 +719,81 @@ class ResearchFlow:
         # -----------------------------------------------------
 
         if self.state == ResearchState.SCAN_NODE:
-
+        
             if self.is_wednesday_mode:
-                if self._tap_recommended(img, "[RESEARCH] recommended node tapped"):
+                if self._tap_recommended(
+                    img,
+                    "[RESEARCH] recommended node tapped"
+                ):
                     self.state = ResearchState.START_RESEARCH
                     self._mark()
                 else:
-                    self.log("[RESEARCH] recommended node not found -> retry")
+                    self.log(
+                        "[RESEARCH] recommended node not found -> retry"
+                    )
                     self._mark()
                 return
-
-            if self.state == ResearchState.SCAN_NODE:
-            
-                node = find_next_research_node(
-                    img,
-                    self.log
-                )
-            
-                if node:
-            
-                    p = node["progress"]
-            
-                    self.log(
-                        f"[RESEARCH] next node "
-                        f"{self.current_research}: "
-                        f"{p['text']} "
-                        f"@ {node['x']},{node['y']}"
-                    )
-            
-                    adb_tap(
-                        node["x"],
-                        node["y"]
-                    )
-
-                    self.log("[RESEARCH] node tapped -> waiting popup")
-                    time.sleep(3.0)
-
-                    self.state = ResearchState.START_RESEARCH
-                    self._mark()
-                    return
-            
-                # questa categoria non ha niente disponibile
+        
+            node = find_next_research_node(
+                img,
+                self.log
+            )
+        
+            if node:
+        
+                p = node["progress"]
+        
                 self.log(
-                    f"[RESEARCH] "
-                    f"{self.current_research}: no available node"
+                    f"[RESEARCH] next node "
+                    f"{self.current_research}: "
+                    f"{p['text']} "
+                    f"@ {node['x']},{node['y']}"
                 )
-            
-                # torna alla schermata Techs
-                adb_tap(*BACK)
-                time.sleep(1)
-            
-                self.research_index += 1
-                self.current_research = None
-            
-                self.state = ResearchState.TAP_CATEGORY
+        
+                adb_tap(
+                    node["x"],
+                    node["y"]
+                )
+        
+                self.log("[RESEARCH] node tapped -> waiting popup")
+                time.sleep(3.0)
+        
+                self.state = ResearchState.START_RESEARCH
                 self._mark()
                 return
+        
+            # nessun nodo trovato: retry
+            self.scan_retry += 1
+        
+            if self.scan_retry < SCAN_RETRY_MAX:
+        
+                self.log(
+                    f"[RESEARCH] {self.current_research}: "
+                    f"no node detected -> retry "
+                    f"{self.scan_retry}/{SCAN_RETRY_MAX}"
+                )
+        
+                time.sleep(SCAN_RETRY_WAIT)
+        
+                self._mark()
+                return
+        
+            # dopo N tentativi: passa alla categoria successiva
+            self.log(
+                f"[RESEARCH] {self.current_research}: "
+                f"no available node after {SCAN_RETRY_MAX} scans"
+            )
+        
+            adb_tap(*BACK)
+            time.sleep(2)
+        
+            self.research_index += 1
+            self.current_research = None
+            self.scan_retry = 0
+        
+            self.state = ResearchState.TAP_CATEGORY
+            self._mark()
+            return
 
         # -----------------------------------------------------
 
