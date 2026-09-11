@@ -23,6 +23,7 @@ from research_flow import ResearchFlow
 from simple_events import SIMPLE_EVENTS
 from treasure_flow_simplified import TreasureFlowSimplified
 from workflow_manager import WORKFLOW_MANAGER, Workflow
+from flow_control import is_flow_enabled
 
 # ============================================================
 # CONFIG
@@ -50,8 +51,6 @@ ENABLE_SCREENSHOT_DRIVEN_ENGINE = True
 SCREENSHOT_DRIVEN_DELAY_SEC = 0.30
 # ============================================================
 
-MINISTRY_ENABLED_PATH = os.path.join(BASE_DIR, "ministry_enabled.txt")
-RALLY_ENABLED_PATH = os.path.join(BASE_DIR, "rally_enabled.txt")
 
 # ============================================================
 # HERO SCHEDULE
@@ -580,6 +579,9 @@ def screenshot_producer(stop_evt: threading.Event) -> None:
 def treasure_detect_tick(stop_evt: threading.Event, img=None) -> None:
     global _last_treasure_scan_ts, _last_treasure_alert_ts, _treasure_hits
 
+    if not is_flow_enabled("treasure"):
+        return
+
     if stop_evt.is_set() or not TREASURE_TEMPLATES:
         return
 
@@ -644,7 +646,8 @@ def heal_tick(heal_flow: HealFlow, img=None) -> None:
         return
 
     if (
-        heal_flow.state.name == "IDLE"
+        is_flow_enabled("heal")
+        and heal_flow.state.name == "IDLE"
         and WORKFLOW_MANAGER.can_run(Workflow.HEAL)
         and not WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
         and not WORKFLOW_MANAGER.is_active(Workflow.TREASURE)
@@ -766,6 +769,9 @@ def rally_tick(img=None) -> None:
 def simple_event_watcher_tick(stop_evt: threading.Event, img=None) -> bool:
     global _simple_event_templates, _last_fire_simple_event, _last_generic_fire, _last_multi_resource_time
 
+    if not is_flow_enabled("generic"):
+        return False
+
     if not _simple_event_templates:
         for ev_name, cfg in SIMPLE_EVENTS.items():
             templates = load_templates_from_dir(cfg["templates"])
@@ -885,6 +891,8 @@ def hq_upgrade_watcher_tick(stop_evt: threading.Event, img=None) -> None:
     state = _hq_upgrade_state["state"]
 
     if state == "IDLE":
+        if not is_flow_enabled("hq"):
+            return
         roi, coords = crop_roi(img, HQ_BUBBLE_ROI)
         name, score, loc, hw = match_any(roi, _hq_templates)
         if score >= MATCH_THRESHOLD_HQ and name and "bubble" in name.lower():
@@ -979,16 +987,6 @@ def officer_icon_visible(img) -> bool:
     left_visible = s_score_left >= SCIENCE_ICON_THRESHOLD or c_score_left >= CONSTRUCTION_ICON_THRESHOLD
     top_visible = s_score_top >= SCIENCE_ICON_THRESHOLD or c_score_top >= CONSTRUCTION_ICON_THRESHOLD
     return left_visible or top_visible
-
-def flow_enabled(path: str) -> bool:
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read().strip() != "0"
-    except FileNotFoundError:
-        return True
-    except Exception as exc:
-        log_event(f"[FLOW ENABLE] errore lettura {path}: {exc}")
-        return True
 
 # ============================================================
 # SCHEDULING HELPERS
@@ -1109,6 +1107,9 @@ def init_flows():
     return HealFlow(log_event)
 
 def maybe_trigger_bounty(img=None) -> None:
+    if not is_flow_enabled("bounty"):
+        return
+
     flow = flows.get("bounty")
 
     if flow is None or flow.state.name != "IDLE":
@@ -1137,6 +1138,8 @@ def maybe_trigger_bounty(img=None) -> None:
 
 def maybe_trigger_donation() -> None:
     global _last_donation_main_trigger
+    if not is_flow_enabled("donation"):
+        return
 
     flow = flows.get("donation")
     now = time.time()
@@ -1154,9 +1157,8 @@ def maybe_trigger_donation() -> None:
 
 
 def maybe_trigger_ministry(img=None) -> None:
-    if not flow_enabled(MINISTRY_ENABLED_PATH):
+    if not is_flow_enabled("ministry"):
         return
-
     flow = flows.get("ministry")
     if flow is None or flow.state.name != "IDLE":
         return
@@ -1185,6 +1187,8 @@ def maybe_trigger_ministry(img=None) -> None:
 
 
 def maybe_trigger_forziere(img=None) -> None:
+    if not is_flow_enabled("forziere"):
+        return
     flow = flows.get("forziere")
     if flow is None or flow.state.name != "IDLE":
         return
@@ -1203,6 +1207,8 @@ def maybe_trigger_forziere(img=None) -> None:
         flow.trigger()
 
 def maybe_trigger_hero() -> None:
+    if not is_flow_enabled("hero"):
+        return
     flow = flows.get("hero")
 
     if flow is None or flow.state.name != "IDLE":
@@ -1231,6 +1237,8 @@ def maybe_trigger_hero() -> None:
 
 def maybe_trigger_research(img=None) -> None:
     global _last_research_main_trigger
+    if not is_flow_enabled("research"):
+        return
 
     flow = flows.get("research")
 
@@ -1279,9 +1287,8 @@ def maybe_trigger_research(img=None) -> None:
 
     flow.trigger()
 
-
 def maybe_trigger_rally(img=None) -> None:
-    if not flow_enabled(RALLY_ENABLED_PATH):
+    if not is_flow_enabled("rally"):
         return
 
     flow = flows.get("rally")

@@ -10,6 +10,21 @@ import time
 import cv2
 import numpy as np
 
+import sys
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
+from flow_control import (
+    FLOW_NAMES,
+    get_all_flow_states,
+    is_flow_enabled,
+    set_flow_enabled,
+)
+
 # =========================
 # CONFIG
 # =========================
@@ -22,8 +37,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 IMAGE_PATH = BASE_DIR / "debug" / "screen_treasure.png"
 ICON_TEMPLATE_PATH = BASE_DIR / "boot" / "boot_icon.png"
 HEAL_BATCH_PATH = BASE_DIR / "heal_batch.txt"
-MINISTRY_ENABLED_PATH = BASE_DIR / "ministry_enabled.txt"
-RALLY_ENABLED_PATH = BASE_DIR / "rally_enabled.txt"
 
 # Modalità controllo:
 #   "adb"     -> Android / emulatore
@@ -183,13 +196,58 @@ HTML = """<!doctype html>
       <input id="healBatchInput" type="number" min="1" step="1" placeholder="Heal batch" />
       <button id="healBatchBtn" onclick="setHealBatch()">Set heal batch</button>
       <label class="flow-switch">
-        <input id="rallySwitch" type="checkbox" onchange="setFlowEnabled('rally', this.checked)">
-        <span>RALLY</span>
+        <input id="treasureSwitch" type="checkbox" onchange="setFlowEnabled('treasure', this.checked)">
+        <span>TREASURE</span>
       </label>
-      
+
+      <label class="flow-switch">
+        <input id="hqSwitch" type="checkbox" onchange="setFlowEnabled('hq', this.checked)">
+        <span>HQ</span>
+      </label>
+
+      <label class="flow-switch">
+        <input id="healSwitch" type="checkbox" onchange="setFlowEnabled('heal', this.checked)">
+        <span>HEAL</span>
+      </label>
+
+      <label class="flow-switch">
+        <input id="donationSwitch" type="checkbox" onchange="setFlowEnabled('donation', this.checked)">
+        <span>DONATION</span>
+      </label>
+
       <label class="flow-switch">
         <input id="ministrySwitch" type="checkbox" onchange="setFlowEnabled('ministry', this.checked)">
         <span>MINISTRY</span>
+      </label>
+
+      <label class="flow-switch">
+        <input id="forziereSwitch" type="checkbox" onchange="setFlowEnabled('forziere', this.checked)">
+        <span>FORZIERE</span>
+      </label>
+
+      <label class="flow-switch">
+        <input id="genericSwitch" type="checkbox" onchange="setFlowEnabled('generic', this.checked)">
+        <span>GENERIC</span>
+      </label>
+
+      <label class="flow-switch">
+        <input id="researchSwitch" type="checkbox" onchange="setFlowEnabled('research', this.checked)">
+        <span>RESEARCH</span>
+      </label>
+
+      <label class="flow-switch">
+        <input id="rallySwitch" type="checkbox" onchange="setFlowEnabled('rally', this.checked)">
+        <span>RALLY</span>
+      </label>
+
+      <label class="flow-switch">
+        <input id="heroSwitch" type="checkbox" onchange="setFlowEnabled('hero', this.checked)">
+        <span>HERO</span>
+      </label>
+
+      <label class="flow-switch">
+        <input id="bountySwitch" type="checkbox" onchange="setFlowEnabled('bounty', this.checked)">
+        <span>BOUNTY</span>
       </label>
     </div>
 
@@ -211,8 +269,19 @@ HTML = """<!doctype html>
     const healBatchInput = document.getElementById("healBatchInput");
     const healBatchBtn = document.getElementById("healBatchBtn");
     const modeLabel = document.getElementById("modeLabel");
-    const rallySwitch = document.getElementById("rallySwitch");
-    const ministrySwitch = document.getElementById("ministrySwitch");
+    const flowSwitches = {
+      treasure: document.getElementById("treasureSwitch"),
+      hq: document.getElementById("hqSwitch"),
+      heal: document.getElementById("healSwitch"),
+      donation: document.getElementById("donationSwitch"),
+      ministry: document.getElementById("ministrySwitch"),
+      forziere: document.getElementById("forziereSwitch"),
+      generic: document.getElementById("genericSwitch"),
+      research: document.getElementById("researchSwitch"),
+      rally: document.getElementById("rallySwitch"),
+      hero: document.getElementById("heroSwitch"),
+      bounty: document.getElementById("bountySwitch")
+    };
 
     function setStatus(text, cls = "") {
       statusEl.textContent = text;
@@ -233,9 +302,12 @@ HTML = """<!doctype html>
           healBatchInput.value = data.heal_batch;
         }
         
-        rallySwitch.checked = data.rally_enabled !== false;
-        ministrySwitch.checked = data.ministry_enabled !== false;
-
+        if (data.flows) {
+          Object.entries(flowSwitches).forEach(([flow, sw]) => {
+            sw.checked = data.flows[flow] !== false;
+          });
+        }
+        
       } catch (e) {
         modeLabel.textContent = "errore";
       }
@@ -375,50 +447,58 @@ HTML = """<!doctype html>
     }
 
     async function setFlowEnabled(flow, enabled) {
-      const sw = flow === "rally" ? rallySwitch : ministrySwitch;
-    
+      const sw = flowSwitches[flow];
+
+      if (!sw) {
+        setStatus("Workflow non valido: " + flow, "err");
+        return;
+      }
+
       sw.disabled = true;
-    
+
       try {
         const r = await fetch("/action/set-flow-enabled", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json"
+          },
           body: JSON.stringify({
             flow: flow,
             enabled: enabled
           })
         });
-    
+
         const data = await r.json();
-    
+
         if (data.ok) {
           sw.checked = data.enabled;
+
           setStatus(
             flow.toUpperCase() + " " + (data.enabled ? "ON" : "OFF"),
             "ok"
           );
+
         } else {
           sw.checked = !enabled;
-          setStatus("Errore: " + (data.error || "sconosciuto"), "err");
+
+          setStatus(
+            "Errore: " + (data.error || "sconosciuto"),
+            "err"
+          );
         }
-    
+
       } catch (e) {
         sw.checked = !enabled;
-        setStatus("Errore modifica " + flow, "err");
+
+        setStatus(
+          "Errore modifica " + flow,
+          "err"
+        );
+
       } finally {
         sw.disabled = false;
       }
     }
-
-    img.onload = () => {
-      const t = statusEl.textContent;
-      if (!t.startsWith("Comando eseguito") &&
-          !t.startsWith("Icona premuta") &&
-          !t.startsWith("CALIBRA eseguito") &&
-          !t.startsWith("Heal batch salvato")) {
-        setStatus("Immagine aggiornata: " + new Date().toLocaleTimeString());
-      }
-    };
 
     img.onerror = () => setStatus("Immagine non disponibile", "err");
 
@@ -621,20 +701,6 @@ def set_heal_batch(value):
     HEAL_BATCH_PATH.write_text(f"{value}\n", encoding="utf-8")
     return value
 
-def read_flow_enabled(path):
-    try:
-        value = path.read_text(encoding="utf-8").strip()
-        return value != "0"
-    except FileNotFoundError:
-        return True
-    except Exception:
-        return True
-
-def set_flow_enabled(path, enabled):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("1\n" if enabled else "0\n", encoding="utf-8")
-    return enabled
-
 def android_back():
     if CONTROL_MODE != "adb":
         raise RuntimeError("back supporta solo CONTROL_MODE='adb'")
@@ -737,8 +803,7 @@ class Handler(BaseHTTPRequestHandler):
                 "icon_template_path": str(ICON_TEMPLATE_PATH),
                 "heal_batch_path": str(HEAL_BATCH_PATH),
                 "heal_batch": read_heal_batch(),
-                "rally_enabled": read_flow_enabled(RALLY_ENABLED_PATH),
-                "ministry_enabled": read_flow_enabled(MINISTRY_ENABLED_PATH),
+                "flows": get_all_flow_states(),
             })
 
         return text_response(self, 404, "404 Not Found\n")
@@ -822,34 +887,48 @@ class Handler(BaseHTTPRequestHandler):
     def handle_set_flow_enabled(self):
         try:
             raw = self.read_request_body()
-            payload = json.loads(raw.decode("utf-8") or "{}")
-    
+
+            payload = json.loads(
+                raw.decode("utf-8") or "{}"
+            )
+
             flow = payload.get("flow")
             enabled = payload.get("enabled")
-    
+
+            if flow not in FLOW_NAMES:
+                raise RuntimeError(
+                    f"flow non valido: {flow}"
+                )
+
             if not isinstance(enabled, bool):
-                raise RuntimeError("enabled deve essere true/false")
-    
-            if flow == "rally":
-                path = RALLY_ENABLED_PATH
-            elif flow == "ministry":
-                path = MINISTRY_ENABLED_PATH
-            else:
-                raise RuntimeError("flow non valido")
-    
-            value = set_flow_enabled(path, enabled)
-    
-            return json_response(self, 200, {
-                "ok": True,
-                "flow": flow,
-                "enabled": value,
-            })
-    
+                raise RuntimeError(
+                    "enabled deve essere true/false"
+                )
+
+            value = set_flow_enabled(
+                flow,
+                enabled,
+            )
+
+            return json_response(
+                self,
+                200,
+                {
+                    "ok": True,
+                    "flow": flow,
+                    "enabled": value,
+                },
+            )
+
         except Exception as e:
-            return json_response(self, 500, {
-                "ok": False,
-                "error": str(e),
-            })
+            return json_response(
+                self,
+                500,
+                {
+                    "ok": False,
+                    "error": str(e),
+                },
+            )
 
     def serve_index(self):
         return safe_send(
