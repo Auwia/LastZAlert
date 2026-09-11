@@ -416,6 +416,15 @@ def read_hero_level(img, card):
 
     roi = img[y1:y2, x1:x2]
 
+    if DEBUG and roi is not None and roi.size > 0:
+        cv2.imwrite(
+            os.path.join(
+                DEBUG_DIR,
+                f"ocr_card_{index:02d}.png"
+            ),
+            roi
+        )
+
     if roi is None or roi.size == 0:
         return None
 
@@ -446,6 +455,15 @@ def read_hero_level(img, card):
         ),
     )
 
+    if DEBUG:
+        print(
+            f"[HERO-DEBUG][OCR] "
+            f"card={index} "
+            f"bbox={card['bbox']} "
+            f"roi=({x1},{y1},{x2},{y2}) "
+            f"text={txt!r}"
+        )
+
     level = _extract_level(txt)
 
     if level is None:
@@ -459,6 +477,13 @@ def read_hero_level(img, card):
                 "-c tessedit_char_whitelist=Lv.0123456789"
             ),
         )
+
+        if DEBUG:
+            print(
+                f"[HERO-DEBUG][OCR-INV] "
+                f"card={index} "
+                f"text={txt2!r}"
+            )
 
         level = _extract_level(txt2)
 
@@ -491,7 +516,7 @@ def read_visible_hero_levels(img, log_fn=print):
     heroes = []
 
     for index, card in enumerate(cards, start=1):
-        info = read_hero_level(img, card)
+        info = read_hero_level(img, card, index)
 
         if info is None:
             if DEBUG:
