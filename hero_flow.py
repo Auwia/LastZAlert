@@ -397,7 +397,7 @@ def _extract_level(text):
     return None
 
 
-def read_hero_level(img, card):
+def read_hero_level(img, card, index=0):
     """
     Fa OCR soltanto nella zona del livello della singola card.
     """

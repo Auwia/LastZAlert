@@ -181,6 +181,43 @@ HTML = """<!doctype html>
       margin: 0;
       cursor: pointer;
     }
+    .screen-wrap {
+      position: relative;
+      display: inline-block;
+      max-width: 96vw;
+      line-height: 0;
+    }
+
+    #screen {
+      display: block;
+      -webkit-user-drag: none;
+      user-select: none;
+    }
+
+    #screen.touch-enabled {
+      cursor: crosshair;
+      touch-action: none;
+      outline: 2px solid #4caf50;
+      outline-offset: 2px;
+    }
+
+    .touch-marker {
+      position: absolute;
+      width: 22px;
+      height: 22px;
+      border: 3px solid #ffeb3b;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.15s ease;
+      box-sizing: border-box;
+      z-index: 10;
+    }
+
+    .touch-marker.show {
+      opacity: 1;
+    }
   </style>
 </head>
 <body>
@@ -193,6 +230,7 @@ HTML = """<!doctype html>
       <button id="calibraBtn" onclick="calibra()">CALIBRA</button>
       <button id="backBtn" onclick="androidBack()">BACK</button>
       <button id="homeBtn" onclick="androidHome()">HOME</button>
+      <button id="touchControlBtn" onclick="toggleTouchControl()">📱 CONTROLLO TOUCH: OFF</button>
       <input id="healBatchInput" type="number" min="1" step="1" placeholder="Heal batch" />
       <button id="healBatchBtn" onclick="setHealBatch()">Set heal batch</button>
       <label class="flow-switch">
@@ -250,8 +288,19 @@ HTML = """<!doctype html>
         <span>BOUNTY</span>
       </label>
     </div>
+    <div class="screen-wrap" id="screenWrap">
+      <img
+        id="screen"
+        src="/image?v=init"
+        alt="screen_treasure.png"
+        draggable="false"
+      />
+      <div id="touchMarker" class="touch-marker"></div>
+    </div>
 
-    <img id="screen" src="/image?v=init" alt="screen_treasure.png" />
+    <div class="small" id="touchHelp">
+      Controllo touch disattivato
+    </div>
     <div class="small">File monitorato: debug/screen_treasure.png</div>
     <div class="small">Template icona: boot/boot_icon.png</div>
     <div class="small">Heal batch: heal_batch.txt</div>
@@ -269,6 +318,10 @@ HTML = """<!doctype html>
     const healBatchInput = document.getElementById("healBatchInput");
     const healBatchBtn = document.getElementById("healBatchBtn");
     const modeLabel = document.getElementById("modeLabel");
+    const touchControlBtn = document.getElementById("touchControlBtn");
+    const screenWrap = document.getElementById("screenWrap");
+    const touchMarker = document.getElementById("touchMarker");
+    const touchHelp = document.getElementById("touchHelp");
     const flowSwitches = {
       treasure: document.getElementById("treasureSwitch"),
       hq: document.getElementById("hqSwitch"),
@@ -282,6 +335,532 @@ HTML = """<!doctype html>
       hero: document.getElementById("heroSwitch"),
       bounty: document.getElementById("bountySwitch")
     };
+
+    let touchControlEnabled = false;
+    let gestureStart = null;
+    let pendingTap = null;
+    let markerTimer = null;
+
+    const SWIPE_MIN_DISTANCE_PX = 15;
+    const LONG_PRESS_THRESHOLD_MS = 650;
+    const DOUBLE_TAP_WINDOW_MS = 280;
+    const DOUBLE_TAP_DISTANCE_PX = 30;
+
+
+    function toggleTouchControl() {
+      touchControlEnabled = !touchControlEnabled;
+
+      img.classList.toggle(
+        "touch-enabled",
+        touchControlEnabled
+      );
+
+      touchControlBtn.textContent = touchControlEnabled
+        ? "📱 CONTROLLO TOUCH: ON"
+        : "📱 CONTROLLO TOUCH: OFF";
+
+      touchHelp.textContent = touchControlEnabled
+        ? "Tap · doppio tap · pressione lunga · trascina per swipe"
+        : "Controllo touch disattivato";
+
+      if (!touchControlEnabled) {
+        gestureStart = null;
+        cancelPendingTap();
+      }
+
+      setStatus(
+        touchControlEnabled
+          ? "Controllo touchscreen attivato"
+          : "Controllo touchscreen disattivato",
+        touchControlEnabled ? "ok" : ""
+      );
+    }
+
+
+    function cancelPendingTap() {
+      if (pendingTap && pendingTap.timer) {
+        clearTimeout(pendingTap.timer);
+      }
+
+      pendingTap = null;
+    }
+
+
+    function pointDistance(a, b) {
+      const dx = a.localX - b.localX;
+      const dy = a.localY - b.localY;
+
+      return Math.sqrt(
+        dx * dx + dy * dy
+      );
+    }
+
+
+    function eventToAndroidPoint(ev) {
+      const rect = img.getBoundingClientRect();
+      const wrapRect = screenWrap.getBoundingClientRect();
+
+      if (
+        rect.width <= 0 ||
+        rect.height <= 0 ||
+        img.naturalWidth <= 0 ||
+        img.naturalHeight <= 0
+      ) {
+        throw new Error(
+          "Dimensioni screenshot non disponibili"
+        );
+      }
+
+      let localX = ev.clientX - rect.left;
+      let localY = ev.clientY - rect.top;
+
+      localX = Math.max(
+        0,
+        Math.min(rect.width - 1, localX)
+      );
+
+      localY = Math.max(
+        0,
+        Math.min(rect.height - 1, localY)
+      );
+
+      const androidX = Math.max(
+        0,
+        Math.min(
+          img.naturalWidth - 1,
+          Math.round(
+            localX *
+            img.naturalWidth /
+            rect.width
+          )
+        )
+      );
+
+      const androidY = Math.max(
+        0,
+        Math.min(
+          img.naturalHeight - 1,
+          Math.round(
+            localY *
+            img.naturalHeight /
+            rect.height
+          )
+        )
+      );
+
+      return {
+        x: androidX,
+        y: androidY,
+
+        localX: localX,
+        localY: localY,
+
+        markerX: ev.clientX - wrapRect.left,
+        markerY: ev.clientY - wrapRect.top
+      };
+    }
+
+
+    function showTouchMarker(point) {
+      touchMarker.style.left =
+        point.markerX + "px";
+
+      touchMarker.style.top =
+        point.markerY + "px";
+
+      touchMarker.classList.add("show");
+
+      if (markerTimer) {
+        clearTimeout(markerTimer);
+      }
+
+      markerTimer = setTimeout(() => {
+        touchMarker.classList.remove("show");
+      }, 450);
+    }
+
+
+    async function sendTouch(payload, description) {
+      try {
+        const r = await fetch(
+          "/action/touch",
+          {
+            method: "POST",
+
+            headers: {
+              "Content-Type": "application/json"
+            },
+
+            body: JSON.stringify(payload)
+          }
+        );
+
+        const data = await r.json();
+
+        if (data.ok) {
+          setStatus(
+            description + " → " + data.detail,
+            "ok"
+          );
+        } else {
+          setStatus(
+            "Errore touch: " +
+            (data.error || "sconosciuto"),
+            "err"
+          );
+        }
+
+      } catch (e) {
+        setStatus(
+          "Errore comunicazione touch",
+          "err"
+        );
+      }
+    }
+
+
+    function scheduleTap(point) {
+      const now = performance.now();
+
+      if (pendingTap) {
+        const elapsed =
+          now - pendingTap.time;
+
+        const distance =
+          pointDistance(
+            point,
+            pendingTap.point
+          );
+
+        if (
+          elapsed <= DOUBLE_TAP_WINDOW_MS &&
+          distance <= DOUBLE_TAP_DISTANCE_PX
+        ) {
+          clearTimeout(
+            pendingTap.timer
+          );
+
+          const firstPoint =
+            pendingTap.point;
+
+          pendingTap = null;
+
+          showTouchMarker(point);
+
+          sendTouch(
+            {
+              action: "double_tap",
+              x: firstPoint.x,
+              y: firstPoint.y
+            },
+            "DOUBLE TAP " +
+            firstPoint.x +
+            "," +
+            firstPoint.y
+          );
+
+          return;
+        }
+
+        clearTimeout(
+          pendingTap.timer
+        );
+
+        const oldPoint =
+          pendingTap.point;
+
+        sendTouch(
+          {
+            action: "tap",
+            x: oldPoint.x,
+            y: oldPoint.y
+          },
+          "TAP " +
+          oldPoint.x +
+          "," +
+          oldPoint.y
+        );
+
+        pendingTap = null;
+      }
+
+      const timer = setTimeout(() => {
+        if (!pendingTap) {
+          return;
+        }
+
+        const tapPoint =
+          pendingTap.point;
+
+        pendingTap = null;
+
+        sendTouch(
+          {
+            action: "tap",
+            x: tapPoint.x,
+            y: tapPoint.y
+          },
+          "TAP " +
+          tapPoint.x +
+          "," +
+          tapPoint.y
+        );
+
+      }, DOUBLE_TAP_WINDOW_MS);
+
+      pendingTap = {
+        point: point,
+        time: now,
+        timer: timer
+      };
+    }
+
+
+    img.addEventListener(
+      "pointerdown",
+      (ev) => {
+        if (!touchControlEnabled) {
+          return;
+        }
+
+        if (
+          ev.pointerType === "mouse" &&
+          ev.button !== 0
+        ) {
+          return;
+        }
+
+        ev.preventDefault();
+
+        try {
+          img.setPointerCapture(
+            ev.pointerId
+          );
+        } catch (e) {
+        }
+
+        let point;
+
+        try {
+          point =
+            eventToAndroidPoint(ev);
+        } catch (e) {
+          setStatus(
+            e.message,
+            "err"
+          );
+
+          return;
+        }
+
+        gestureStart = {
+          pointerId: ev.pointerId,
+          point: point,
+          clientX: ev.clientX,
+          clientY: ev.clientY,
+          time: performance.now()
+        };
+
+        showTouchMarker(point);
+      }
+    );
+
+
+    img.addEventListener(
+      "pointermove",
+      (ev) => {
+        if (
+          !touchControlEnabled ||
+          !gestureStart ||
+          gestureStart.pointerId !== ev.pointerId
+        ) {
+          return;
+        }
+
+        ev.preventDefault();
+      }
+    );
+
+
+    img.addEventListener(
+      "pointerup",
+      (ev) => {
+        if (
+          !touchControlEnabled ||
+          !gestureStart ||
+          gestureStart.pointerId !== ev.pointerId
+        ) {
+          return;
+        }
+
+        ev.preventDefault();
+
+        let endPoint;
+
+        try {
+          endPoint =
+            eventToAndroidPoint(ev);
+        } catch (e) {
+          gestureStart = null;
+
+          setStatus(
+            e.message,
+            "err"
+          );
+
+          return;
+        }
+
+        const elapsed =
+          performance.now() -
+          gestureStart.time;
+
+        const dx =
+          ev.clientX -
+          gestureStart.clientX;
+
+        const dy =
+          ev.clientY -
+          gestureStart.clientY;
+
+        const distance =
+          Math.sqrt(
+            dx * dx + dy * dy
+          );
+
+        const startPoint =
+          gestureStart.point;
+
+        gestureStart = null;
+
+        try {
+          if (
+            img.hasPointerCapture(
+              ev.pointerId
+            )
+          ) {
+            img.releasePointerCapture(
+              ev.pointerId
+            );
+          }
+        } catch (e) {
+        }
+
+        showTouchMarker(endPoint);
+
+        if (
+          distance >=
+          SWIPE_MIN_DISTANCE_PX
+        ) {
+          cancelPendingTap();
+
+          const durationMs =
+            Math.min(
+              5000,
+              Math.max(
+                100,
+                Math.round(elapsed)
+              )
+            );
+
+          sendTouch(
+            {
+              action: "swipe",
+
+              x1: startPoint.x,
+              y1: startPoint.y,
+
+              x2: endPoint.x,
+              y2: endPoint.y,
+
+              duration_ms: durationMs
+            },
+            "SWIPE " +
+            startPoint.x +
+            "," +
+            startPoint.y +
+            " → " +
+            endPoint.x +
+            "," +
+            endPoint.y
+          );
+
+          return;
+        }
+
+        if (
+          elapsed >=
+          LONG_PRESS_THRESHOLD_MS
+        ) {
+          cancelPendingTap();
+
+          const durationMs =
+            Math.min(
+              5000,
+              Math.max(
+                500,
+                Math.round(elapsed)
+              )
+            );
+
+          sendTouch(
+            {
+              action: "long_press",
+              x: startPoint.x,
+              y: startPoint.y,
+              duration_ms: durationMs
+            },
+            "LONG PRESS " +
+            startPoint.x +
+            "," +
+            startPoint.y +
+            " " +
+            durationMs +
+            "ms"
+          );
+
+          return;
+        }
+
+        scheduleTap(
+          endPoint
+        );
+      }
+    );
+
+
+    img.addEventListener(
+      "pointercancel",
+      (ev) => {
+        if (
+          gestureStart &&
+          gestureStart.pointerId ===
+          ev.pointerId
+        ) {
+          gestureStart = null;
+        }
+      }
+    );
+
+
+    img.addEventListener(
+      "contextmenu",
+      (ev) => {
+        if (
+          touchControlEnabled
+        ) {
+          ev.preventDefault();
+        }
+      }
+    );
+
+
+    img.addEventListener(
+      "dragstart",
+      (ev) => {
+        ev.preventDefault();
+      }
+    );
 
     function setStatus(text, cls = "") {
       statusEl.textContent = text;
@@ -721,6 +1300,217 @@ def android_home():
 
     return f"adb HOME keyevent {ADB_HOME_KEYCODE}"
 
+def touch_int(payload, key, minimum=0, maximum=10000):
+    value = payload.get(key)
+
+    if isinstance(value, bool):
+        raise RuntimeError(
+            f"{key} non valido"
+        )
+
+    try:
+        value = int(value)
+    except Exception:
+        raise RuntimeError(
+            f"{key} deve essere un numero intero"
+        )
+
+    if value < minimum or value > maximum:
+        raise RuntimeError(
+            f"{key} fuori range: {value}"
+        )
+
+    return value
+
+
+def execute_touch_action(payload):
+    if CONTROL_MODE != "adb":
+        raise RuntimeError(
+            "touch supporta solo CONTROL_MODE='adb'"
+        )
+
+    action = payload.get("action")
+
+    if action == "tap":
+        x = touch_int(
+            payload,
+            "x"
+        )
+
+        y = touch_int(
+            payload,
+            "y"
+        )
+
+        run_cmd(
+            adb_prefix() + [
+                "shell",
+                "input",
+                "tap",
+                str(x),
+                str(y),
+            ]
+        )
+
+        detail = (
+            f"tap ({x},{y})"
+        )
+
+        print(
+            f"[TOUCH] {detail}",
+            flush=True,
+        )
+
+        return detail
+
+
+    if action == "double_tap":
+        x = touch_int(
+            payload,
+            "x"
+        )
+
+        y = touch_int(
+            payload,
+            "y"
+        )
+
+        cmd = (
+            adb_prefix() + [
+                "shell",
+                "input",
+                "tap",
+                str(x),
+                str(y),
+            ]
+        )
+
+        run_cmd(cmd)
+
+        time.sleep(
+            0.10
+        )
+
+        run_cmd(cmd)
+
+        detail = (
+            f"double tap ({x},{y})"
+        )
+
+        print(
+            f"[TOUCH] {detail}",
+            flush=True,
+        )
+
+        return detail
+
+
+    if action == "long_press":
+        x = touch_int(
+            payload,
+            "x"
+        )
+
+        y = touch_int(
+            payload,
+            "y"
+        )
+
+        duration_ms = touch_int(
+            payload,
+            "duration_ms",
+            300,
+            5000,
+        )
+
+        run_cmd(
+            adb_prefix() + [
+                "shell",
+                "input",
+                "swipe",
+                str(x),
+                str(y),
+                str(x),
+                str(y),
+                str(duration_ms),
+            ]
+        )
+
+        detail = (
+            f"long press "
+            f"({x},{y}) "
+            f"{duration_ms}ms"
+        )
+
+        print(
+            f"[TOUCH] {detail}",
+            flush=True,
+        )
+
+        return detail
+
+
+    if action == "swipe":
+        x1 = touch_int(
+            payload,
+            "x1"
+        )
+
+        y1 = touch_int(
+            payload,
+            "y1"
+        )
+
+        x2 = touch_int(
+            payload,
+            "x2"
+        )
+
+        y2 = touch_int(
+            payload,
+            "y2"
+        )
+
+        duration_ms = touch_int(
+            payload,
+            "duration_ms",
+            100,
+            5000,
+        )
+
+        run_cmd(
+            adb_prefix() + [
+                "shell",
+                "input",
+                "swipe",
+                str(x1),
+                str(y1),
+                str(x2),
+                str(y2),
+                str(duration_ms),
+            ]
+        )
+
+        detail = (
+            f"swipe "
+            f"({x1},{y1}) "
+            f"-> "
+            f"({x2},{y2}) "
+            f"{duration_ms}ms"
+        )
+
+        print(
+            f"[TOUCH] {detail}",
+            flush=True,
+        )
+
+        return detail
+
+
+    raise RuntimeError(
+        f"azione touch non valida: {action}"
+    )
+
 def close_game():
     if CONTROL_MODE == "adb":
         for _ in range(ADB_BACK_COUNT):
@@ -821,6 +1611,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/action/back":
             return self.handle_locked_action(android_back)
 
+        if self.path == "/action/touch":
+            return self.handle_touch_action()
+
         if self.path == "/action/set-heal-batch":
             return self.handle_set_heal_batch()
 
@@ -864,6 +1657,85 @@ class Handler(BaseHTTPRequestHandler):
                 "ok": False,
                 "error": str(e),
             })
+        finally:
+            ACTION_LOCK.release()
+
+    def handle_touch_action(self):
+        try:
+            raw = self.read_request_body()
+
+            payload = json.loads(
+                raw.decode("utf-8") or "{}"
+            )
+
+        except Exception as e:
+            return json_response(
+                self,
+                400,
+                {
+                    "ok": False,
+                    "error": (
+                        "payload touch non valido: "
+                        + str(e)
+                    ),
+                },
+            )
+
+        if not ACTION_LOCK.acquire(
+            blocking=False
+        ):
+            return json_response(
+                self,
+                409,
+                {
+                    "ok": False,
+                    "error": "azione già in corso",
+                },
+            )
+
+        try:
+            detail = execute_touch_action(
+                payload
+            )
+
+            return json_response(
+                self,
+                200,
+                {
+                    "ok": True,
+                    "detail": detail,
+                },
+            )
+
+        except subprocess.CalledProcessError as e:
+            err = (
+                e.stderr
+                or e.stdout
+                or str(e)
+            ).strip()
+
+            return json_response(
+                self,
+                500,
+                {
+                    "ok": False,
+                    "error": (
+                        err
+                        or "comando ADB fallito"
+                    ),
+                },
+            )
+
+        except Exception as e:
+            return json_response(
+                self,
+                500,
+                {
+                    "ok": False,
+                    "error": str(e),
+                },
+            )
+
         finally:
             ACTION_LOCK.release()
 
