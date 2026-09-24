@@ -1,25 +1,48 @@
 #!/usr/bin/env bash
-
-set -e
+set -euo pipefail
 
 echo "[SECURITY] Scanning staged files for secrets..."
 
-STAGED_CONTENT="$(git diff --cached --no-ext-diff --unified=0 --text)"
+# Scan only textual additions from the staged Git diff.
+#
+# --cached       staged changes only
+# --no-ext-diff  do not invoke external diff drivers
+# --textconv     allow configured text conversions
+# -U0            no context: scan only changed lines
+#
+# Binary files such as PNGs are represented by Git as:
+#   Binary files ... differ
+# Their binary contents are never stored in a shell variable.
 
-if printf '%s\n' "$STAGED_CONTENT" | \
-    grep -qE 'https://(discord\.com|discordapp\.com)/api/webhooks/[0-9]+/[A-Za-z0-9._-]+'; then
+PATTERN='discord(app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9._-]+|-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----'
 
+FOUND=0
+
+while IFS= read -r line; do
+    # Only inspect added lines, excluding the "+++ b/file" diff header.
+    [[ "$line" == +* ]] || continue
+    [[ "$line" == "+++"* ]] && continue
+
+    content="${line:1}"
+
+    if printf '%s\n' "$content" | grep -Eqi "$PATTERN"; then
+        echo "[SECURITY] Possible secret detected:"
+        printf '  %s\n' "$content"
+        FOUND=1
+    fi
+done < <(
+    git diff \
+        --cached \
+        --no-ext-diff \
+        --textconv \
+        -U0 \
+        -- .
+)
+
+if (( FOUND != 0 )); then
     echo
-    echo "[SECURITY] BLOCKED: Discord webhook detected in staged changes."
-    echo "[SECURITY] Move the secret to .env before committing."
-    exit 1
-fi
-
-if printf '%s\n' "$STAGED_CONTENT" | \
-    grep -qE 'BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY'; then
-
-    echo
-    echo "[SECURITY] BLOCKED: private key detected in staged changes."
+    echo "[SECURITY] Commit blocked."
+    echo "[SECURITY] Remove the secret from the staged changes and try again."
     exit 1
 fi
 
