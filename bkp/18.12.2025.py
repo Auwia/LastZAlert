@@ -8,7 +8,7 @@ import cv2
 # =============================
 # CONFIG DISCORD WEBHOOK
 # =============================
-DISCORD_WEBHOOK_URL = "REMOVED_DISCORD_WEBHOOK"
+DISCORD_WEBHOOK_URL = ""
 
 def send_notification(text: str) -> bool:
     if not DISCORD_WEBHOOK_URL:

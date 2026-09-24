@@ -44,19 +44,19 @@ ROI_OFFICER_NICKNAME = (0.20, 0.95, 0.30, 0.46)
 NICKNAME_OFFICER_THRESHOLD = 0.70
 NICKNAME_SCALES = (0.80, 0.85, 0.90, 0.95, 1.00, 1.05)
 
-CENTER_SCREEN = (540, 960)
+CENTER_SCREEN = (540, 900)
 BOTTOM_LEFT = (100, 2400)
 BOTTOM_LEFT_PIXEL = (80, 2200)
 BOTTOM_RIGHT = (1000, 2400)
 
-USE_FIXED_MINISTRY_TAPS = True
+USE_FIXED_MINISTRY_TAPS = False
 TAP_CONSTRUCTION_FRAC = (0.50, 0.72)
 TAP_SCIENCE_FRAC      = (0.17, 0.84)
 
 FLOW_WATCHDOG_SEC = 360
 
-USE_FIXED_NAV_TAPS = True
-USE_FIXED_APPLY_TAPS = True
+USE_FIXED_NAV_TAPS = False
+USE_FIXED_APPLY_TAPS = False
 
 USE_FIXED_SEARCH_TAP = False
 TAP_SEARCH_TIMEOUT_SEC = 20
@@ -473,7 +473,7 @@ class MinistryFlow:
             cy = loc[1] + hw[0] // 2 + offset[1]
             adb_tap(cx, cy)
             time.sleep(0.4)
-            self.log(f"[MINISTRY] tap {key} score={score:.3f}")
+            self.log(f"[MINISTRY] tap {key} score={score:.3f} @ {cx},{cy}")
             if next_state:
                 self.state = next_state
             self._mark_action()
@@ -827,11 +827,19 @@ class MinistryFlow:
                 return
 
         if self.state == MinistryState.TAP_CENTER:
+            self.log(f"[MINISTRY][TAP_CENTER] enter center={CENTER_SCREEN}  screen={img.shape[1]}x{img.shape[0]}" )
+
+            time.sleep(3.0)
+            
+            self.log(
+                f"[MINISTRY][TAP_CENTER] CLICK @ "
+                f"{CENTER_SCREEN[0]},{CENTER_SCREEN[1]}"
+            )
             adb_tap(*CENTER_SCREEN)
-            self.log(f"[MINISTRY] tap center @ {CENTER_SCREEN[0]},{CENTER_SCREEN[1]} → wait palace popup")
             time.sleep(PALACE_POPUP_SLEEP_SEC)
             self.state = MinistryState.TAP_PALACE
             self._mark_action()
+            self.log("[MINISTRY][TAP_CENTER] done → TAP_PALACE")
             return
 
         if self.state == MinistryState.TAP_PALACE:
@@ -845,8 +853,33 @@ class MinistryFlow:
                 )
                 return
 
-            if self._tap_template(img, "pres_palace", MinistryState.TAP_POSITION):
-                return
+            name, score, loc, hw = match_any(
+                img,
+                self.templates["pres_palace"]
+            )
+
+            self.log(
+                f"[MINISTRY][TAP_PALACE] "
+                f"match={name} score={score:.3f} "
+                f"loc={loc} size={hw} thr={THR:.2f}"
+            )
+
+            if name and score >= THR:
+                cx = loc[0] + hw[1] // 2
+                cy = loc[1] + hw[0] // 2
+
+                self.log(
+                    f"[MINISTRY][TAP_PALACE] CLICK @ "
+                    f"{cx},{cy} score={score:.3f}"
+                )
+
+                adb_tap(cx, cy)
+                time.sleep(0.4)
+
+                self.state = MinistryState.TAP_POSITION
+                self._mark_action()
+
+            return
 
         if self.state == MinistryState.TAP_POSITION:
             if USE_FIXED_NAV_TAPS:
@@ -892,11 +925,6 @@ class MinistryFlow:
 
         if self.state == MinistryState.READ_X:
             time.sleep(0.3)
-            if self._precheck_exit(img):
-                self.log("[MINISTRY] precheck exit → EXIT_MINISTRY")
-                self.state = MinistryState.EXIT_MINISTRY
-                self._mark_action()
-                return
 
             if self.xy_read:
                 return
@@ -939,22 +967,30 @@ class MinistryFlow:
             return
 
         if self.state == MinistryState.BACK_FROM_X:
-            adb_tap(*BOTTOM_LEFT)
+            self.log(
+                f"[MINISTRY] BACK_FROM_X → tap close @ "
+                f"{BOTTOM_LEFT[0]},{BOTTOM_LEFT[1]}"
+            )
+            adb_tap(*BOTTOM_LEFT_PIXEL)
             time.sleep(0.4)
 
+            self.log("[MINISTRY][BACK_FROM_X] done → SCROLL_UP")
             self.state = MinistryState.SCROLL_UP
             self._mark_action()
             return
 
         if self.state == MinistryState.SCROLL_UP:
-            # Simula uno swipe: bottom-right verso top-right (scroll lista verso su)
             from bot_utils import adb_swipe
+            self.log("[MINISTRY][SCROLL_UP] enter")
             adb_swipe(1000, 2000, 1000, 1000, 300)
+            self.log("[MINISTRY][SCROLL_UP] swipe done → TAP_SCIENCE")
             self.state = MinistryState.TAP_SCIENCE
             self._mark_action()
             return
 
         if self.state == MinistryState.TAP_SCIENCE:
+            self.log("[MINISTRY][TAP_SCIENCE] enter")
+
             if USE_FIXED_MINISTRY_TAPS:
                 self._tap_fixed_frac(
                     img,
@@ -964,57 +1000,92 @@ class MinistryFlow:
                 )
                 return
 
-            if self._tap_template(img, "sec_science", MinistryState.READ_Y):
-                return
+            name, score, loc, hw = match_any(
+                img,
+                self.templates["sec_science"]
+            )
+
+            self.log(
+                f"[MINISTRY][TAP_SCIENCE] "
+                f"match={name} score={score:.3f} "
+                f"loc={loc} size={hw} thr={THR:.2f}"
+            )
+
+            if name and score >= THR:
+                if self._tap_template(
+                    img,
+                    "sec_science",
+                    MinistryState.READ_Y
+                ):
+                    return
+
+            return
 
         if self.state == MinistryState.READ_Y:
             time.sleep(0.3)
-            if self._precheck_exit(img):
-                self.log("[MINISTRY] precheck exit → EXIT_MINISTRY")
-                self.state = MinistryState.EXIT_MINISTRY
-                self._mark_action()
+
+            name, score, _, _ = match_any(
+                img,
+                self.templates["sec_science_title"]
+            )
+
+            if not name or score < 0.8:
                 return
 
-            # aspetta che il popup sia davvero aperto
-            name, score, _, _ = match_any(img, self.templates["sec_science_title"])
-            if not name or score < 0.8:
-                return  # popup non pronto, aspetta frame successivo
-        
-            roi, _ = crop_roi(img, ROI_APPOINTMENT_LIST)
+            roi, _ = crop_roi(
+                img,
+                ROI_APPOINTMENT_LIST
+            )
+
             if roi is None or roi.size == 0:
-                self.log("[MINISTRY] ROI vuota, attendo frame successivo")
+                self.log(
+                    "[MINISTRY] ROI vuota, attendo frame successivo"
+                )
                 return
-    
+
             if DEBUG:
-                cv2.imwrite("debug/ministry/roi_ministry_science_timer.png", roi)
-                cv2.imwrite("debug/ministry/ministry_science_full.png", img)
+                cv2.imwrite(
+                    "debug/ministry/roi_ministry_science_timer.png",
+                    roi
+                )
+                cv2.imwrite(
+                    "debug/ministry/ministry_science_full.png",
+                    img
+                )
 
             if (
                 self._is_current_officer(img)
                 or self._application_note_visible(img)
                 or self._already_applied(img)
             ):
-                self.log("[MINISTRY] già ufficiale / application presente → EXIT")
+                self.log(
+                    "[MINISTRY] science: già ministro/application presente → EXIT"
+                )
                 self.state = MinistryState.EXIT_MINISTRY
                 self._mark_action()
                 return
-        
+
             txt = _ocr_text(roi)
             self.y = _parse_scheduled(txt)
-            self.log(f"[MINISTRY] READ_Y = {self.y}")
             self.xy_read = True
 
-            if self._already_applied(img):
-                self.log("[MINISTRY] già applicato (riga verde rilevata)")
-                self.state = MinistryState.READ_APPLICATION_NOTE
-                self._mark_action()
+            self.log(
+                f"[MINISTRY] READ_Y = {self.y}"
+            )
+
+            if self.y <= self.x:
+                self.log(
+                    f"[MINISTRY] queues: construction={self.x} "
+                    f"science={self.y} → SCIENCE"
+                )
+                self.state = MinistryState.APPLY_SCIENCE
+
             else:
-                if self.y <= self.x:
-                    self.state = MinistryState.APPLY_SCIENCE
-                    self.log("[MINISTRY] decisione: APPLY SCIENCE")
-                else:
-                    self.state = MinistryState.APPLY_CONSTRUCTION
-                    self.state = MinistryState.APPLY_CONSTRUCTION
+                self.log(
+                    f"[MINISTRY] queues: construction={self.x} "
+                    f"science={self.y} → CONSTRUCTION"
+                )
+                self.state = MinistryState.APPLY_CONSTRUCTION
 
             self._mark_action()
             return

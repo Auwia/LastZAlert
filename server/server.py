@@ -1,11 +1,22 @@
 from flask import Flask, request, abort
-import os, time
+import os
+import sys
+import time
+from pathlib import Path
+
 from treasure_detector import detect_treasure
 import requests
 
-print("[+] server.py caricato")
 
-DISCORD_WEBHOOK_URL = "REMOVED_DISCORD_WEBHOOK"
+# Allow this script to import the shared configuration from the project root.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from config import DISCORD_WEBHOOK_URL
+
+
+print("[+] server.py loaded")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -44,10 +55,22 @@ def upload_raw():
 
     now = time.time()
     if name and (now - LAST_ALERT_TIME) > MIN_SECONDS_BETWEEN_ALERTS:
-        print("[🎁] TESORO RILEVATO, invio Discord")
-        requests.post(DISCORD_WEBHOOK_URL, json={
-            "content": f"🎁 Tesoro rilevato ({name}) score={score:.3f}"
-        })
+        if not DISCORD_WEBHOOK_URL:
+            print("[!] Discord webhook is not configured; notification skipped")
+        else:
+            try:
+                response = requests.post(
+                    DISCORD_WEBHOOK_URL,
+                    json={
+                        "content": f"🎁 Tesoro rilevato ({name}) score={score:.3f}"
+                    },
+                    timeout=10,
+                )
+                response.raise_for_status()
+                print("[+] Discord notification sent")
+            except requests.RequestException as exc:
+                print(f"[!] Discord notification failed: {exc}")
+
         LAST_ALERT_TIME = now
 
     return "ok", 200

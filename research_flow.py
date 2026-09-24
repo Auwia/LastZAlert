@@ -368,7 +368,7 @@ class ResearchFlow:
         }
 
         self.research_priorities = [
-            ("hero", load_templates("research/hero_training.png")),
+            # COMPLETED! ("hero", load_templates("research/hero_training.png")),
             ("military", load_templates("research/military_strategies.png")),
             ("rapid", load_templates("research/rapid_grow.png")),
         ]

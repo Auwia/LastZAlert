@@ -11,6 +11,8 @@ import cv2
 import numpy as np
 import requests
 
+from config import DISCORD_WEBHOOK_URL
+
 # ============================================================
 # CONFIG
 # ============================================================
@@ -18,8 +20,7 @@ import requests
 ADB_CMD = "adb"
 PACKAGE_NAME = "com.readygo.barrel.gp"
 
-# Discord webhook (ATTENZIONE: se pubblico, meglio metterlo in env var)
-DISCORD_WEBHOOK_URL = "REMOVED_DISCORD_WEBHOOK"
+# Discord configuration is loaded from the local environment.
 
 # Loop timing
 CHECK_INTERVAL_SEC = 2

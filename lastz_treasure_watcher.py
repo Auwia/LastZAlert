@@ -12,6 +12,8 @@ import cv2
 import numpy as np
 import requests
 
+from config import DISCORD_WEBHOOK_URL
+
 from bounty_flow import BountyFlow
 from donation_flow import DonationFlow
 from forziere_flow import ForziereFlow
@@ -75,10 +77,7 @@ HERO_LAST_RUN_PATH = os.path.join(BASE_DIR, "hero_last_run.txt")
 
 ENABLE_MULTI_RESOURCE_COLLECTION = True
 
-DISCORD_WEBHOOK_URL = os.environ.get(
-    "DISCORD_WEBHOOK_URL",
-    "REMOVED_DISCORD_WEBHOOK",
-)
+
 
 DEBUG_DIR = os.path.join(BASE_DIR, "debug")
 DEBUG_RALLY_DIR = os.path.join(DEBUG_DIR, "rally")
@@ -984,9 +983,25 @@ def officer_icon_visible(img) -> bool:
             f"capitalclash L={cc_score_left:.3f}"
         )
 
-    left_visible = s_score_left >= SCIENCE_ICON_THRESHOLD or c_score_left >= CONSTRUCTION_ICON_THRESHOLD
-    top_visible = s_score_top >= SCIENCE_ICON_THRESHOLD or c_score_top >= CONSTRUCTION_ICON_THRESHOLD
-    return left_visible or top_visible
+    science_visible = (
+        s_score_left >= SCIENCE_ICON_THRESHOLD
+        or s_score_top >= SCIENCE_ICON_THRESHOLD
+    )
+
+    construction_visible = (
+        c_score_left >= CONSTRUCTION_ICON_THRESHOLD
+        or c_score_top >= CONSTRUCTION_ICON_THRESHOLD
+    )
+
+    capital_clash_visible = (
+        cc_score_left >= CAPITALCLASH_ICON_THRESHOLD
+    )
+
+    return (
+        science_visible
+        or construction_visible
+        or capital_clash_visible
+    )
 
 # ============================================================
 # SCHEDULING HELPERS
