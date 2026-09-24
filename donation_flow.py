@@ -15,7 +15,7 @@ from bot_utils import load_image, crop_roi, load_templates, match_any, adb_tap, 
 # DEBUG
 # ============================================================
 
-DEBUG_DONATION = True
+DEBUG_DONATION = False
 DEBUG_DIR = "debug/donation"
 os.makedirs(DEBUG_DIR, exist_ok=True)
 

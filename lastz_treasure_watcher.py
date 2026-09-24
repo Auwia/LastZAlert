@@ -132,6 +132,10 @@ MINISTRY_BLOCKER_ICON_DIR = os.path.join(
 HQ_VIEW_DIR = os.path.join(BASE_DIR, "ministry", "hq_view")
 
 MINISTRY_BLOCKER_THRESHOLD = 0.80
+
+# Last blocker reported in the log.
+# Used only to suppress duplicate detection messages.
+_last_ministry_blocker_name = None
 HQ_VIEW_THRESHOLD = 0.80
 
 HQ_VIEW_ROI = (0.72, 1.00, 0.82, 1.00)
@@ -1008,14 +1012,29 @@ def officer_icon_visible(img) -> bool:
         and best_score >= MINISTRY_BLOCKER_THRESHOLD
     )
 
-    if visible:
-        log_event(
-            f"[MINISTRY BLOCKER] detected={best_name} "
-            f"score={best_score:.3f} "
-            f"source={best_source} "
-            f"scale={best_scale:.2f}"
-        )
-    elif not DEBUG_EVENTS_ONLY:
+    # Log blocker only when its state changes.
+    # Avoid repeating the same detection on every scan.
+    global _last_ministry_blocker_name
+
+    current_blocker = best_name if visible else None
+
+    if current_blocker != _last_ministry_blocker_name:
+        if current_blocker is not None:
+            log_event(
+                f"[MINISTRY BLOCKER] detected={best_name} "
+                f"score={best_score:.3f} "
+                f"source={best_source} "
+                f"scale={best_scale:.2f}"
+            )
+        elif _last_ministry_blocker_name is not None:
+            log_event(
+                f"[MINISTRY BLOCKER] cleared="
+                f"{_last_ministry_blocker_name}"
+            )
+
+        _last_ministry_blocker_name = current_blocker
+
+    elif DEBUG and not DEBUG_EVENTS_ONLY:
         log_event(
             f"[MINISTRY BLOCKER] best={best_name} "
             f"score={best_score:.3f} "
