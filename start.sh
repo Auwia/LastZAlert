@@ -5,13 +5,11 @@ set -e
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_DIR"
 
-if [ -f ".env" ]; then
-    set -a
-    source .env
-    set +a
-fi
-
 ADB_DEVICE="${ADB_DEVICE:-}"
+
+if [ -z "$ADB_DEVICE" ] && [ -f ".env" ]; then
+    ADB_DEVICE="$("$PROJECT_DIR/venv/bin/python" -c 'from config import ADB_DEVICE; print(ADB_DEVICE)' 2>/dev/null)"
+fi
 
 if [ -z "$ADB_DEVICE" ]; then
     echo "[ERROR] ADB_DEVICE is not configured."

@@ -48,7 +48,7 @@ echo "Activate the environment:"
 echo "  source venv/bin/activate"
 echo
 echo "Run LastZAlert:"
-echo "  ./lastz_treasure_watcher.py"
+echo "  ./start.sh"
 echo
 echo "Optional Discord notifications:"
 echo "  Configure DISCORD_WEBHOOK_URL in .env"
