@@ -38,6 +38,12 @@ Connect the phone and verify the connection:
 
 The device must appear with status `device`.
 
+Configure your Android device in `.env`:
+
+    ADB_DEVICE=192.168.0.95:5555
+
+Use the IP address and port assigned to your own Android device.
+
 Wireless ADB can also be used if it is already configured on the Android device.
 
 ## Discord notifications
@@ -64,10 +70,17 @@ The setup script enables it automatically.
 
 Start the game on the Android device, then:
 
-    source venv/bin/activate
-    ./lastz_treasure_watcher.py
+    ./start.sh
 
-Stop the bot with `Ctrl+C`.
+The launcher automatically starts:
+
+- AndroidTouchGrab to block physical touch input while keeping ADB control available
+- the LastZAlert web monitor
+- the LastZAlert automation bot
+
+This is especially useful when controlling a phone with a damaged or unusable touchscreen.
+
+Stop everything with `Ctrl+C`.
 
 ## Updating
 

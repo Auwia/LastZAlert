@@ -40,3 +40,5 @@ load_env_file()
 
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
+
+ADB_DEVICE = os.environ.get("ADB_DEVICE", "")
