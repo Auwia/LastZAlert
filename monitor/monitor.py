@@ -20,9 +20,13 @@ if str(BASE_DIR) not in sys.path:
 
 from flow_control import (
     FLOW_NAMES,
+    MINISTRY_NAMES,
     get_all_flow_states,
+    get_all_ministry_states,
     is_flow_enabled,
+    is_ministry_enabled,
     set_flow_enabled,
+    set_ministry_enabled,
 )
 
 # =========================
@@ -259,6 +263,21 @@ HTML = """<!doctype html>
       </label>
 
       <label class="flow-switch">
+        <input id="ministryConstructionSwitch" type="checkbox" onchange="setMinistryEnabled('construction', this.checked)">
+        <span>↳ CONSTRUCTION</span>
+      </label>
+
+      <label class="flow-switch">
+        <input id="ministryScienceSwitch" type="checkbox" onchange="setMinistryEnabled('science', this.checked)">
+        <span>↳ SCIENCE</span>
+      </label>
+
+      <label class="flow-switch">
+        <input id="ministryAgricultureSwitch" type="checkbox" onchange="setMinistryEnabled('agriculture', this.checked)">
+        <span>↳ AGRICULTURE</span>
+      </label>
+
+      <label class="flow-switch">
         <input id="forziereSwitch" type="checkbox" onchange="setFlowEnabled('forziere', this.checked)">
         <span>FORZIERE</span>
       </label>
@@ -334,6 +353,12 @@ HTML = """<!doctype html>
       rally: document.getElementById("rallySwitch"),
       hero: document.getElementById("heroSwitch"),
       bounty: document.getElementById("bountySwitch")
+    };
+
+    const ministrySwitches = {
+      construction: document.getElementById("ministryConstructionSwitch"),
+      science: document.getElementById("ministryScienceSwitch"),
+      agriculture: document.getElementById("ministryAgricultureSwitch")
     };
 
     let touchControlEnabled = false;
@@ -886,11 +911,67 @@ HTML = """<!doctype html>
             sw.checked = data.flows[flow] !== false;
           });
         }
+
+        if (data.ministries) {
+          Object.entries(ministrySwitches).forEach(([ministry, sw]) => {
+            sw.checked = data.ministries[ministry] !== false;
+          });
+        }
         
       } catch (e) {
         modeLabel.textContent = "errore";
       }
     }
+
+    async function setMinistryEnabled(ministry, enabled) {
+      const sw = ministrySwitches[ministry];
+
+      if (!sw) {
+        setStatus("Ministero non valido: " + ministry, "err");
+        return;
+      }
+
+      sw.disabled = true;
+
+      try {
+        const r = await fetch("/action/set-ministry-enabled", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            ministry: ministry,
+            enabled: enabled
+          })
+        });
+
+        const data = await r.json();
+
+        if (data.ok) {
+          sw.checked = data.enabled;
+
+          setStatus(
+            "MINISTRY " + ministry.toUpperCase() + " " +
+            (data.enabled ? "ON" : "OFF"),
+            "ok"
+          );
+        } else {
+          sw.checked = !enabled;
+          setStatus(
+            "Errore: " + (data.error || "sconosciuto"),
+            "err"
+          );
+        }
+
+      } catch (e) {
+        sw.checked = !enabled;
+        setStatus("Errore chiamata comando", "err");
+
+      } finally {
+        sw.disabled = false;
+      }
+    }
+
 
     async function closeGame() {
       closeBtn.disabled = true;
@@ -1594,6 +1675,7 @@ class Handler(BaseHTTPRequestHandler):
                 "heal_batch_path": str(HEAL_BATCH_PATH),
                 "heal_batch": read_heal_batch(),
                 "flows": get_all_flow_states(),
+                "ministries": get_all_ministry_states(),
             })
 
         return text_response(self, 404, "404 Not Found\n")
@@ -1619,6 +1701,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path == "/action/set-flow-enabled":
             return self.handle_set_flow_enabled()
+
+        if self.path == "/action/set-ministry-enabled":
+            return self.handle_set_ministry_enabled()
 
         if self.path == "/action/home":
             return self.handle_locked_action(android_home)
@@ -1788,6 +1873,52 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "flow": flow,
+                    "enabled": value,
+                },
+            )
+
+        except Exception as e:
+            return json_response(
+                self,
+                500,
+                {
+                    "ok": False,
+                    "error": str(e),
+                },
+            )
+
+    def handle_set_ministry_enabled(self):
+        try:
+            raw = self.read_request_body()
+
+            payload = json.loads(
+                raw.decode("utf-8") or "{}"
+            )
+
+            ministry = payload.get("ministry")
+            enabled = payload.get("enabled")
+
+            if ministry not in MINISTRY_NAMES:
+                raise RuntimeError(
+                    f"ministero non valido: {ministry}"
+                )
+
+            if not isinstance(enabled, bool):
+                raise RuntimeError(
+                    "enabled deve essere true/false"
+                )
+
+            value = set_ministry_enabled(
+                ministry,
+                enabled,
+            )
+
+            return json_response(
+                self,
+                200,
+                {
+                    "ok": True,
+                    "ministry": ministry,
                     "enabled": value,
                 },
             )

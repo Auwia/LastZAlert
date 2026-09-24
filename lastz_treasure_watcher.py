@@ -124,14 +124,14 @@ TREASURE_ROI = (0.50, 0.82, 0.84, 0.97)
 RESOURCE_EVENTS = {"wood", "meal", "electricity", "alloy", "zelt", "experience"}
 MULTI_RESOURCE_BLOCK_SECONDS = 1
 
-SCIENCE_ICON_DIR = os.path.join(BASE_DIR, "ministry", "science_icon")
-CONSTRUCTION_ICON_DIR = os.path.join(BASE_DIR, "ministry", "construction_icon")
-CAPITALCLASH_ICON_DIR = os.path.join(BASE_DIR, "ministry", "capital_clash")
+MINISTRY_BLOCKER_ICON_DIR = os.path.join(
+    BASE_DIR,
+    "ministry",
+    "blocker_icons",
+)
 HQ_VIEW_DIR = os.path.join(BASE_DIR, "ministry", "hq_view")
 
-SCIENCE_ICON_THRESHOLD = 0.80
-CONSTRUCTION_ICON_THRESHOLD = 0.80
-CAPITALCLASH_ICON_THRESHOLD = 0.80
+MINISTRY_BLOCKER_THRESHOLD = 0.80
 HQ_VIEW_THRESHOLD = 0.80
 
 HQ_VIEW_ROI = (0.72, 1.00, 0.82, 1.00)
@@ -164,9 +164,7 @@ _hq_upgrade_state = {"state": "IDLE"}
 _hq_templates = None
 
 HEAL_ICON_TEMPLATES = []
-SCIENCE_ICON_TEMPLATES = []
-CONSTRUCTION_ICON_TEMPLATES = []
-CAPITALCLASH_ICON_TEMPLATES = []
+MINISTRY_BLOCKER_TEMPLATES = []
 HQ_VIEW_TEMPLATES = []
 TREASURE_TEMPLATES = []
 
@@ -961,47 +959,71 @@ def hq_view_visible(img) -> bool:
 
 
 def officer_icon_visible(img) -> bool:
+    """
+    Return True when any Ministry blocker icon is visible.
+
+    Every template stored in ministry/blocker_icons automatically
+    becomes a Ministry blocker. No Python change is required when
+    adding new blocker icons.
+    """
+    if not MINISTRY_BLOCKER_TEMPLATES:
+        return False
+
     roi_left, _ = crop_roi(img, LEFT_ICON_ROI)
     roi_top, _ = crop_roi(img, TOP_ICON_ROI)
 
     if DEBUG_SAVE_ROIS:
-        cv2.imwrite(os.path.join(DEBUG_DIR, "officer_left.png"), roi_left)
-        cv2.imwrite(os.path.join(DEBUG_DIR, "officer_top.png"), roi_top)
-
-    _, s_score_left, _, _ = match_any(roi_left, SCIENCE_ICON_TEMPLATES)
-    _, c_score_left, _, _ = match_any(roi_left, CONSTRUCTION_ICON_TEMPLATES)
-    _, cc_score_left, _, _ = match_any(roi_left, CAPITALCLASH_ICON_TEMPLATES)
-
-    _, s_score_top, _, _, _ = match_any_multiscale(roi_top, SCIENCE_ICON_TEMPLATES)
-    _, c_score_top, _, _, _ = match_any_multiscale(roi_top, CONSTRUCTION_ICON_TEMPLATES)
-
-    if not DEBUG_EVENTS_ONLY:
-        log_event(
-            "[MINISTRY BLOCKER] "
-            f"science L={s_score_left:.3f} T={s_score_top:.3f} | "
-            f"construction L={c_score_left:.3f} T={c_score_top:.3f} | "
-            f"capitalclash L={cc_score_left:.3f}"
+        cv2.imwrite(
+            os.path.join(DEBUG_DIR, "officer_left.png"),
+            roi_left
+        )
+        cv2.imwrite(
+            os.path.join(DEBUG_DIR, "officer_top.png"),
+            roi_top
         )
 
-    science_visible = (
-        s_score_left >= SCIENCE_ICON_THRESHOLD
-        or s_score_top >= SCIENCE_ICON_THRESHOLD
+    left_name, left_score, _, _ = match_any(
+        roi_left,
+        MINISTRY_BLOCKER_TEMPLATES
     )
 
-    construction_visible = (
-        c_score_left >= CONSTRUCTION_ICON_THRESHOLD
-        or c_score_top >= CONSTRUCTION_ICON_THRESHOLD
+    top_name, top_score, _, _, top_scale = match_any_multiscale(
+        roi_top,
+        MINISTRY_BLOCKER_TEMPLATES
     )
 
-    capital_clash_visible = (
-        cc_score_left >= CAPITALCLASH_ICON_THRESHOLD
+    if top_score > left_score:
+        best_name = top_name
+        best_score = top_score
+        best_source = "TOP"
+        best_scale = top_scale
+    else:
+        best_name = left_name
+        best_score = left_score
+        best_source = "LEFT"
+        best_scale = 1.0
+
+    visible = (
+        best_name is not None
+        and best_score >= MINISTRY_BLOCKER_THRESHOLD
     )
 
-    return (
-        science_visible
-        or construction_visible
-        or capital_clash_visible
-    )
+    if visible:
+        log_event(
+            f"[MINISTRY BLOCKER] detected={best_name} "
+            f"score={best_score:.3f} "
+            f"source={best_source} "
+            f"scale={best_scale:.2f}"
+        )
+    elif not DEBUG_EVENTS_ONLY:
+        log_event(
+            f"[MINISTRY BLOCKER] best={best_name} "
+            f"score={best_score:.3f} "
+            f"source={best_source}"
+        )
+
+    return visible
+
 
 # ============================================================
 # SCHEDULING HELPERS
@@ -1093,13 +1115,13 @@ def init_research_flow():
 # ============================================================
 
 def load_runtime_templates() -> None:
-    global HEAL_ICON_TEMPLATES, SCIENCE_ICON_TEMPLATES, CONSTRUCTION_ICON_TEMPLATES
-    global CAPITALCLASH_ICON_TEMPLATES, HQ_VIEW_TEMPLATES, TREASURE_TEMPLATES
+    global HEAL_ICON_TEMPLATES, MINISTRY_BLOCKER_TEMPLATES
+    global HQ_VIEW_TEMPLATES, TREASURE_TEMPLATES
 
-    SCIENCE_ICON_TEMPLATES = load_templates_from_dir(SCIENCE_ICON_DIR)
-    CONSTRUCTION_ICON_TEMPLATES = load_templates_from_dir(CONSTRUCTION_ICON_DIR)
+    MINISTRY_BLOCKER_TEMPLATES = load_templates_from_dir(
+        MINISTRY_BLOCKER_ICON_DIR
+    )
     HEAL_ICON_TEMPLATES = load_templates_from_dir(TEMPLATES_HEAL_DIR)
-    CAPITALCLASH_ICON_TEMPLATES = load_templates_from_dir(CAPITALCLASH_ICON_DIR)
     HQ_VIEW_TEMPLATES = load_templates_from_dir(HQ_VIEW_DIR)
     TREASURE_TEMPLATES = load_templates_from_dir(TEMPLATES_TREASURES_DIR)
 

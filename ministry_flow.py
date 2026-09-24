@@ -12,6 +12,7 @@ from typing import Optional
 
 from workflow_manager import Workflow, WORKFLOW_MANAGER
 from bot_utils import adb_tap, crop_roi, match_any, load_templates, load_image
+from flow_control import get_all_ministry_states
 
 # ============================================================
 # DEBUG
@@ -329,6 +330,7 @@ def _load_ministry_templates():
         "pres_palace":         load_templates("ministry/pres_palace.png"),
         "position":            load_templates("ministry/position.png"),
         "sec_constr":          load_templates("ministry/sec_construction.png"),
+        "sec_agriculture":     load_templates("ministry/sec_agriculture.png"),
         "sec_science":         load_templates("ministry/sec_science.png"),
         "apply":               load_templates("ministry/apply.png"),
         "confirm":             load_templates("ministry/confirm.png"),
@@ -370,6 +372,11 @@ class MinistryState(Enum):
     TAP_GO_HQ = 22
     READ_APPLICATION_NOTE = 23
     EXIT_MINISTRY = 24
+    SELECT_MINISTRY = 25
+    TAP_AGRICULTURE = 26
+    READ_AGRICULTURE = 27
+    NAVIGATE_WINNER = 28
+    APPLY_WINNER = 29
 
 STATE_TIMEOUTS = {
     MinistryState.TAP_MAP: 10,
@@ -380,6 +387,10 @@ STATE_TIMEOUTS = {
     MinistryState.READ_X: 100,
     MinistryState.TAP_SCIENCE: 30,
     MinistryState.READ_Y: 100,
+    MinistryState.TAP_AGRICULTURE: 30,
+    MinistryState.READ_AGRICULTURE: 100,
+    MinistryState.NAVIGATE_WINNER: 45,
+    MinistryState.APPLY_WINNER: 50,
     MinistryState.APPLY_SCIENCE: 50,
     MinistryState.APPLY_CONSTRUCTION_DONE: 50,
     MinistryState.CONFIRM: 100,
@@ -389,6 +400,25 @@ STATE_TIMEOUTS = {
 # ============================================================
 # MINISTRY FLOW
 # ============================================================
+
+def _daily_ministry_mode():
+    """
+    Select the ministry application strategy for the current day.
+
+    Tuesday   -> Construction only
+    Wednesday -> Science only
+    Other days -> automatic queue comparison
+    """
+    weekday = time.localtime().tm_wday
+
+    if weekday == 1:  # Tuesday
+        return "construction"
+
+    if weekday == 2:  # Wednesday
+        return "science"
+
+    return "auto"
+
 
 class MinistryFlow:
     def _tap_fixed_frac(self, img, frac, label, next_state=None, sleep_sec=0.4):
@@ -624,14 +654,162 @@ class MinistryFlow:
         self.state = MinistryState.IDLE
         self.last_action_ts = 0.0
         self.templates = _load_ministry_templates()
+        # Legacy X/Y fields.
+        # Kept temporarily while the Ministry selector is migrated.
         self.x = None
         self.y = None
         self.xy_read = False
+
+        # Independent Ministry selector.
+        self.ministry_candidates = []
+        self.ministry_queues = {}
+        self.ministry_winner = None
+        self.current_ministry = None
+        self.ministry_candidate_index = 0
+
         self.cooldown_until = 0
         self.state_started_ts = time.time()
         self.returning_to_construction = False
         self.note_read_started_ts = None
+        self.daily_mode = "auto"
+        self.enabled_ministries = {
+            "construction": True,
+            "science": True,
+            "agriculture": True,
+        }
         self.log("[MINISTRY-FLOW] inizializzato")
+
+    def _build_ministry_candidates(self):
+        """
+        Build the list of ministries that are allowed to participate
+        in this workflow run.
+
+        Tuesday:
+            Construction only, if enabled.
+
+        Wednesday:
+            Science only, if enabled.
+
+        Other days:
+            Every enabled ministry participates.
+
+        Disabled ministries are never opened or inspected.
+        """
+        enabled = self.enabled_ministries
+
+        if self.daily_mode == "construction":
+            candidates = (
+                ["construction"]
+                if enabled.get("construction", True)
+                else []
+            )
+
+        elif self.daily_mode == "science":
+            candidates = (
+                ["science"]
+                if enabled.get("science", True)
+                else []
+            )
+
+        else:
+            # Order reflects the screen layout:
+            # Construction and Agriculture are in the upper area.
+            # Science requires scrolling down.
+            candidates = [
+                name
+                for name in (
+                    "construction",
+                    "agriculture",
+                    "science",
+                )
+                if enabled.get(name, True)
+            ]
+
+        self.ministry_candidates = candidates
+        self.ministry_queues = {}
+        self.ministry_winner = None
+        self.current_ministry = None
+        self.ministry_candidate_index = 0
+
+        self.log(
+            "[MINISTRY] candidates frozen = "
+            + (
+                ", ".join(
+                    name.upper()
+                    for name in candidates
+                )
+                if candidates
+                else "NONE"
+            )
+        )
+
+        return candidates
+
+    def _candidate_queue_done(self, ministry, queue):
+        """
+        Store the queue for the ministry just inspected and advance
+        to the next enabled candidate.
+        """
+        self.ministry_queues[ministry] = queue
+
+        self.log(
+            f"[MINISTRY] queue stored: "
+            f"{ministry.upper()}={queue}"
+        )
+
+        self.ministry_candidate_index += 1
+        self.current_ministry = None
+
+        self.log(
+            f"[MINISTRY] candidate completed → "
+            f"{self.ministry_candidate_index}/"
+            f"{len(self.ministry_candidates)} inspected"
+        )
+
+        return (
+            self.ministry_candidate_index
+            >= len(self.ministry_candidates)
+        )
+
+    def _finish_candidate_in_open_popup(self, ministry):
+        """
+        If the just-read ministry was the last candidate, select the
+        smallest queue immediately.
+
+        Return True when the current open popup is already the winner,
+        so it can go directly to APPLY_WINNER without close/reopen.
+        """
+        if self.ministry_candidate_index < len(self.ministry_candidates):
+            return False
+
+        if not self.ministry_queues:
+            return False
+
+        self.ministry_winner = min(
+            self.ministry_queues,
+            key=self.ministry_queues.get
+        )
+
+        self.log(
+            f"[MINISTRY] collected queues = {self.ministry_queues}"
+        )
+        self.log(
+            f"[MINISTRY] WINNER = "
+            f"{self.ministry_winner.upper()} "
+            f"queue={self.ministry_queues[self.ministry_winner]}"
+        )
+
+        if self.ministry_winner == ministry:
+            self.current_ministry = ministry
+            self.log(
+                f"[MINISTRY] winner already open = "
+                f"{ministry.upper()} → APPLY directly"
+            )
+            self.state = MinistryState.APPLY_WINNER
+            self._mark_action()
+            return True
+
+        return False
 
     def _cooldown_ok(self) -> bool:
         return (time.time() - self.last_action_ts) >= ACTION_COOLDOWN_SEC
@@ -713,7 +891,31 @@ class MinistryFlow:
     
         if not WORKFLOW_MANAGER.acquire(Workflow.MINISTRY):
             return
+
+        # Freeze the daily ministry strategy for this workflow run.
+        # It must not change while the workflow is already running.
+        self.daily_mode = _daily_ministry_mode()
+        self.enabled_ministries = get_all_ministry_states()
+
+        self.log(
+            f"[MINISTRY] daily mode frozen = {self.daily_mode.upper()}"
+        )
+        self.log(
+            "[MINISTRY] enabled ministries frozen: "
+            f"construction={'ON' if self.enabled_ministries.get('construction', True) else 'OFF'} "
+            f"science={'ON' if self.enabled_ministries.get('science', True) else 'OFF'} "
+            f"agriculture={'ON' if self.enabled_ministries.get('agriculture', True) else 'OFF'}"
+        )
     
+        self._build_ministry_candidates()
+
+        # Nothing is allowed today: release the workflow immediately.
+        if not self.ministry_candidates:
+            self.log("[MINISTRY] no enabled candidates → release")
+            self.state = MinistryState.IDLE
+            WORKFLOW_MANAGER.release(Workflow.MINISTRY)
+            return
+
         time.sleep(0.3)
         self.state = MinistryState.TAP_MAP
         self.started_ts = time.time()
@@ -887,13 +1089,212 @@ class MinistryFlow:
                     img,
                     TAP_POSITION_FRAC,
                     "position",
-                    MinistryState.TAP_CONSTRUCTION,
+                    MinistryState.SELECT_MINISTRY,
                     sleep_sec=1.0
                 )
                 return
 
-            if self._tap_template(img, "position", MinistryState.TAP_CONSTRUCTION):
+            if self._tap_template(img, "position", MinistryState.SELECT_MINISTRY):
                 return
+
+        if self.state == MinistryState.SELECT_MINISTRY:
+            if not self.ministry_candidates:
+                self.log("[MINISTRY] no candidates after Position → EXIT")
+                self.state = MinistryState.EXIT_MINISTRY
+                self._mark_action()
+                return
+
+            if self.ministry_candidate_index >= len(self.ministry_candidates):
+                self.log(
+                    f"[MINISTRY] collected queues = {self.ministry_queues}"
+                )
+
+                if not self.ministry_queues:
+                    self.log("[MINISTRY] no queues collected → EXIT")
+                    self.state = MinistryState.EXIT_MINISTRY
+                    self._mark_action()
+                    return
+
+                self.ministry_winner = min(
+                    self.ministry_queues,
+                    key=self.ministry_queues.get
+                )
+
+                self.log(
+                    f"[MINISTRY] WINNER = "
+                    f"{self.ministry_winner.upper()} "
+                    f"queue={self.ministry_queues[self.ministry_winner]}"
+                )
+
+                self.log(
+                    f"[MINISTRY] navigating to winner "
+                    f"{self.ministry_winner.upper()}"
+                )
+
+                # After inspecting Science the list is scrolled down.
+                # Construction and Agriculture are in the upper section,
+                # so restore the upper part before searching for them.
+                if (
+                    self.ministry_candidates
+                    and self.ministry_candidates[-1] == "science"
+                    and self.ministry_winner in (
+                        "construction",
+                        "agriculture",
+                    )
+                ):
+                    self.log(
+                        "[MINISTRY] winner is in upper section "
+                        "→ scroll back up"
+                    )
+                    adb_swipe(
+                        1000, 1000,
+                        1000, 2000,
+                        300
+                    )
+                    time.sleep(0.6)
+
+                self.state = MinistryState.NAVIGATE_WINNER
+                self._mark_action()
+                return
+
+            ministry = self.ministry_candidates[
+                self.ministry_candidate_index
+            ]
+            self.current_ministry = ministry
+
+            self.log(
+                f"[MINISTRY] candidate "
+                f"{self.ministry_candidate_index + 1}/"
+                f"{len(self.ministry_candidates)} "
+                f"= {ministry.upper()}"
+            )
+
+            if ministry == "construction":
+                self.state = MinistryState.TAP_CONSTRUCTION
+                self._mark_action()
+                return
+
+            if ministry == "science":
+                # Science is below the currently visible section.
+                self.log(
+                    "[MINISTRY] Construction not selected "
+                    "→ skip it → scroll to Science"
+                )
+                self.state = MinistryState.SCROLL_UP
+                self._mark_action()
+                return
+
+            if ministry == "agriculture":
+                self.log(
+                    "[MINISTRY] Agriculture selected "
+                    "→ TAP_AGRICULTURE"
+                )
+                self.state = MinistryState.TAP_AGRICULTURE
+                self._mark_action()
+                return
+
+            self.log(
+                f"[MINISTRY] unknown candidate={ministry!r} → EXIT"
+            )
+            self.state = MinistryState.EXIT_MINISTRY
+            self._mark_action()
+            return
+
+        if self.state == MinistryState.TAP_AGRICULTURE:
+            self.log("[MINISTRY][TAP_AGRICULTURE] enter")
+
+            name, score, loc, hw = match_any(
+                img,
+                self.templates["sec_agriculture"]
+            )
+
+            self.log(
+                f"[MINISTRY][TAP_AGRICULTURE] "
+                f"match={name} score={score:.3f} "
+                f"loc={loc} size={hw} thr={THR:.2f}"
+            )
+
+            if name and score >= THR:
+                if self._tap_template(
+                    img,
+                    "sec_agriculture",
+                    MinistryState.READ_AGRICULTURE
+                ):
+                    self.current_ministry = "agriculture"
+                    self.log(
+                        "[MINISTRY] tap sec_agriculture "
+                        "→ READ_AGRICULTURE"
+                    )
+                    return
+
+            return
+
+        if self.state == MinistryState.READ_AGRICULTURE:
+            time.sleep(0.3)
+
+            roi, _ = crop_roi(
+                img,
+                ROI_APPOINTMENT_LIST
+            )
+
+            if roi is None or roi.size == 0:
+                self.log(
+                    "[MINISTRY] Agriculture ROI empty "
+                    "→ waiting for next frame"
+                )
+                return
+
+            if DEBUG:
+                cv2.imwrite(
+                    "debug/ministry/roi_ministry_agriculture_timer.png",
+                    roi
+                )
+                cv2.imwrite(
+                    "debug/ministry/ministry_agriculture_full.png",
+                    img
+                )
+
+            # Same common checks used by the other ministries.
+            if (
+                self._is_current_officer(img)
+                or self._application_note_visible(img)
+                or self._already_applied(img)
+            ):
+                self.log(
+                    "[MINISTRY] agriculture: already officer / "
+                    "application present → EXIT"
+                )
+                self.state = MinistryState.EXIT_MINISTRY
+                self._mark_action()
+                return
+
+            txt = _ocr_text(roi)
+            queue = _parse_scheduled(txt)
+
+            self.log(
+                f"[MINISTRY] READ_AGRICULTURE = {queue}"
+            )
+
+            self._candidate_queue_done(
+                "agriculture",
+                queue
+            )
+
+            if self._finish_candidate_in_open_popup("agriculture"):
+                return
+
+            # Close Agriculture popup and return to the appointment list.
+            adb_tap(*BOTTOM_LEFT_PIXEL)
+            time.sleep(0.4)
+
+            self.log(
+                "[MINISTRY] Agriculture inspected "
+                "→ close popup → SELECT_MINISTRY"
+            )
+
+            self.state = MinistryState.SELECT_MINISTRY
+            self._mark_action()
+            return
 
         if self.state == MinistryState.TAP_CONSTRUCTION:
             next_state = (
@@ -953,16 +1354,31 @@ class MinistryFlow:
                 return
 
             txt = _ocr_text(roi)
-            self.x = _parse_scheduled(txt)
-            self.log(f"[MINISTRY] READ_X = {self.x}")
+            queue = _parse_scheduled(txt)
 
-            if self._already_applied(img):
-                self.log("[MINISTRY] già applicato dopo READ_X → vai a NOTE")
-                self.state = MinistryState.READ_APPLICATION_NOTE
-                self._mark_action()
+            self.x = queue
+
+            self.log(
+                f"[MINISTRY] READ_CONSTRUCTION = {queue}"
+            )
+
+            self._candidate_queue_done(
+                "construction",
+                queue
+            )
+
+            if self._finish_candidate_in_open_popup("construction"):
                 return
 
-            self.state = MinistryState.BACK_FROM_X
+            adb_tap(*BOTTOM_LEFT_PIXEL)
+            time.sleep(0.4)
+
+            self.log(
+                "[MINISTRY] Construction inspected "
+                "→ close popup → SELECT_MINISTRY"
+            )
+
+            self.state = MinistryState.SELECT_MINISTRY
             self._mark_action()
             return
 
@@ -1066,28 +1482,136 @@ class MinistryFlow:
                 return
 
             txt = _ocr_text(roi)
-            self.y = _parse_scheduled(txt)
-            self.xy_read = True
+            queue = _parse_scheduled(txt)
+
+            self.y = queue
 
             self.log(
-                f"[MINISTRY] READ_Y = {self.y}"
+                f"[MINISTRY] READ_SCIENCE = {queue}"
             )
 
-            if self.y <= self.x:
-                self.log(
-                    f"[MINISTRY] queues: construction={self.x} "
-                    f"science={self.y} → SCIENCE"
-                )
-                self.state = MinistryState.APPLY_SCIENCE
+            self._candidate_queue_done(
+                "science",
+                queue
+            )
 
+            if self._finish_candidate_in_open_popup("science"):
+                return
+
+            adb_tap(*BOTTOM_LEFT_PIXEL)
+            time.sleep(0.4)
+
+            self.log(
+                "[MINISTRY] Science inspected "
+                "→ close popup → SELECT_MINISTRY"
+            )
+
+            self.state = MinistryState.SELECT_MINISTRY
+            self._mark_action()
+            return
+
+        # -------------------------
+        # NAVIGATE TO SELECTED WINNER
+        # -------------------------
+        if self.state == MinistryState.NAVIGATE_WINNER:
+            winner = self.ministry_winner
+
+            if winner == "construction":
+                template_key = "sec_constr"
+            elif winner == "agriculture":
+                template_key = "sec_agriculture"
+            elif winner == "science":
+                template_key = "sec_science"
             else:
                 self.log(
-                    f"[MINISTRY] queues: construction={self.x} "
-                    f"science={self.y} → CONSTRUCTION"
+                    f"[MINISTRY] invalid winner={winner} → EXIT"
                 )
-                self.state = MinistryState.APPLY_CONSTRUCTION
+                self.state = MinistryState.EXIT_MINISTRY
+                self._mark_action()
+                return
 
-            self._mark_action()
+            name, score, loc, hw = match_any(
+                img,
+                self.templates[template_key]
+            )
+
+            self.log(
+                f"[MINISTRY][WINNER] "
+                f"{winner.upper()} "
+                f"match={name} score={score:.3f}"
+            )
+
+            if name and score >= THR:
+                if self._tap_template(
+                    img,
+                    template_key,
+                    MinistryState.APPLY_WINNER
+                ):
+                    self.current_ministry = winner
+                    self.log(
+                        f"[MINISTRY] winner opened = "
+                        f"{winner.upper()}"
+                    )
+                    return
+
+            return
+
+        # -------------------------
+        # APPLY SELECTED WINNER
+        # -------------------------
+        if self.state == MinistryState.APPLY_WINNER:
+            winner = self.ministry_winner
+
+            # Safety checks again after reopening the winner.
+            if self._is_current_officer(img):
+                self.log(
+                    f"[MINISTRY] already officer "
+                    f"({winner}) → application note"
+                )
+                self.state = MinistryState.READ_APPLICATION_NOTE
+                self._mark_action()
+                return
+
+            if self._application_note_visible(img):
+                self.log(
+                    f"[MINISTRY] application already active "
+                    f"({winner}) → application note"
+                )
+                self.state = MinistryState.READ_APPLICATION_NOTE
+                self._mark_action()
+                return
+
+            if self._already_applied(img):
+                self.log(
+                    f"[MINISTRY] already applied "
+                    f"({winner}) → application note"
+                )
+                self.state = MinistryState.READ_APPLICATION_NOTE
+                self._mark_action()
+                return
+
+            if USE_FIXED_APPLY_TAPS:
+                self._tap_fixed_frac(
+                    img,
+                    TAP_APPLY_FRAC,
+                    f"apply_{winner}",
+                    MinistryState.CONFIRM,
+                    sleep_sec=0.8
+                )
+                return
+
+            if self._tap_template(
+                img,
+                "apply",
+                score_thr=0.6
+            ):
+                self.log(
+                    f"[MINISTRY] APPLY tapped "
+                    f"for {winner.upper()}"
+                )
+                self.state = MinistryState.CONFIRM
+                self._mark_action()
+
             return
 
         # -------------------------
