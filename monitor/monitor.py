@@ -88,112 +88,363 @@ HTML = """<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LastZAlert Monitor</title>
   <style>
-    :root { color-scheme: dark; }
-    html, body {
-      margin: 0;
-      padding: 0;
-      background: #111;
-      color: #eee;
-      font-family: Arial, sans-serif;
-      min-height: 100vh;
+    :root {
+      color-scheme: dark;
+      --bg: #090c10;
+      --panel: #11161d;
+      --panel2: #171d25;
+      --border: #29313c;
+      --text: #e8edf2;
+      --muted: #8995a3;
+      --green: #38d67a;
+      --red: #ef5350;
+      --blue: #4ea1ff;
+      --yellow: #ffd54f;
     }
-    body {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 12px;
-      padding: 12px;
+
+    * {
       box-sizing: border-box;
     }
+
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    body {
+      min-height: 100vh;
+    }
+
     .wrap {
       width: 100%;
-      max-width: 96vw;
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 290px minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr) auto;
+    }
+
+    .console-header {
+      grid-column: 1 / -1;
+      height: 58px;
       display: flex;
-      flex-direction: column;
       align-items: center;
-      gap: 10px;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 0 18px;
+      background: #0d1117;
+      border-bottom: 1px solid var(--border);
     }
-    img {
-      max-width: 96vw;
-      max-height: 80vh;
-      object-fit: contain;
-      border: 1px solid #333;
-      background: #000;
-      box-shadow: 0 0 20px rgba(0,0,0,.35);
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
     }
+
+    .brand-mark {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 12px rgba(56, 214, 122, .75);
+      flex: 0 0 auto;
+    }
+
+    .brand-title {
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      white-space: nowrap;
+    }
+
+    .brand-subtitle {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+    }
+
     .status {
-      font-size: 14px;
-      opacity: .9;
-      text-align: center;
+      max-width: 55vw;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: right;
     }
-    .small {
-      font-size: 12px;
-      opacity: .65;
-      text-align: center;
+
+    .status.ok {
+      color: var(--green);
     }
-    .err { color: #ff8f8f; }
-    .ok { color: #8fffaa; }
+
+    .status.err {
+      color: #ff8585;
+    }
+
+    .sidebar {
+      grid-column: 1;
+      grid-row: 2;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 14px;
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+    }
+
+    .section {
+      margin-bottom: 16px;
+    }
+
+    .section-title {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1.7px;
+      text-transform: uppercase;
+    }
+
     .toolbar {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      justify-content: center;
-      align-items: center;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 7px;
     }
-    button, input {
-      border-radius: 8px;
-      padding: 10px 14px;
-      font-size: 14px;
+
+    button,
+    input {
+      font: inherit;
     }
+
     button {
-      background: #2a2a2a;
-      color: #fff;
-      border: 1px solid #444;
+      min-height: 38px;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--panel2);
+      color: var(--text);
       cursor: pointer;
+      transition:
+        background .15s ease,
+        border-color .15s ease,
+        transform .05s ease;
     }
-    button:hover { background: #333; }
-    button.danger {
-      background: #7a1f1f;
-      border-color: #a33;
+
+    button:hover {
+      background: #202833;
+      border-color: #3b4654;
     }
-    button.danger:hover { background: #912626; }
+
+    button:active {
+      transform: translateY(1px);
+    }
+
     button:disabled {
-      opacity: .6;
+      opacity: .55;
       cursor: wait;
     }
-    input {
-      width: 110px;
-      background: #1b1b1b;
-      color: #fff;
-      border: 1px solid #444;
+
+    button.primary {
+      border-color: #2864a8;
+      background: #17375c;
     }
+
+    button.primary:hover {
+      background: #204a78;
+    }
+
+    button.danger {
+      border-color: #743334;
+      background: #451f20;
+    }
+
+    button.danger:hover {
+      background: #5b2829;
+    }
+
+    #allWorkflowsBtn {
+      min-height: 48px;
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: .7px;
+      border-color: #29975b;
+      background: #17613a;
+    }
+
+    #allWorkflowsBtn:hover {
+      filter: brightness(1.15);
+    }
+
+    #allWorkflowsBtn.master-off {
+      border-color: #743334;
+      background: #451f20;
+    }
+
+    #allWorkflowsBtn.master-partial {
+      border-color: #8a6d24;
+      background: #554516;
+    }
+
+    #touchControlBtn {
+      grid-column: 1 / -1;
+    }
+
+    .flow-list {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
     .flow-switch {
+      min-height: 37px;
       display: flex;
       align-items: center;
-      gap: 6px;
-      background: #2a2a2a;
-      border: 1px solid #444;
-      border-radius: 8px;
-      padding: 8px 12px;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 7px 10px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--panel2);
       cursor: pointer;
+      user-select: none;
     }
-    
+
+    .flow-switch:hover {
+      background: #1d252e;
+    }
+
+    .flow-switch span {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: .35px;
+    }
+
     .flow-switch input {
-      width: 20px;
-      height: 20px;
+      appearance: none;
+      -webkit-appearance: none;
+      width: 34px;
+      height: 18px;
       margin: 0;
+      padding: 0;
+      position: relative;
+      flex: 0 0 auto;
+      border: 1px solid #4a5563;
+      border-radius: 20px;
+      background: #2a3038;
       cursor: pointer;
+      transition: .18s ease;
     }
+
+    .flow-switch input::after {
+      content: "";
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #9ba5b0;
+      transition: .18s ease;
+    }
+
+    .flow-switch input:checked {
+      border-color: #29975b;
+      background: #17613a;
+    }
+
+    .flow-switch input:checked::after {
+      left: 18px;
+      background: #66ee9c;
+    }
+
+    .ministry-group {
+      margin: 2px 0 3px 14px;
+      padding: 5px 0 2px 9px;
+      border-left: 2px solid #303b47;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .ministry-group .flow-switch {
+      min-height: 32px;
+      background: #121820;
+      border-color: #242d37;
+    }
+
+    .ministry-group .flow-switch span {
+      color: #b8c2cc;
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    .heal-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 72px 48px;
+      gap: 5px;
+      margin-bottom: 5px;
+    }
+
+    .heal-row .flow-switch {
+      min-width: 0;
+    }
+
+    #healBatchInput {
+      width: 100%;
+      min-width: 0;
+      height: 37px;
+      padding: 6px 7px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: #0e1319;
+      color: var(--text);
+      text-align: center;
+    }
+
+    #healBatchBtn {
+      min-height: 37px;
+      padding: 5px;
+      font-size: 11px;
+    }
+
+    .main-panel {
+      grid-column: 2;
+      grid-row: 2;
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: auto;
+      padding: 14px;
+      background:
+        radial-gradient(circle at center, #141a21 0, #0b0e12 70%);
+    }
+
     .screen-wrap {
       position: relative;
       display: inline-block;
-      max-width: 96vw;
+      max-width: 100%;
+      max-height: calc(100vh - 112px);
       line-height: 0;
     }
 
     #screen {
       display: block;
+      max-width: 100%;
+      max-height: calc(100vh - 112px);
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      border: 1px solid #303945;
+      border-radius: 6px;
+      background: #000;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, .45);
       -webkit-user-drag: none;
       user-select: none;
     }
@@ -201,7 +452,7 @@ HTML = """<!doctype html>
     #screen.touch-enabled {
       cursor: crosshair;
       touch-action: none;
-      outline: 2px solid #4caf50;
+      outline: 2px solid var(--green);
       outline-offset: 2px;
     }
 
@@ -209,12 +460,12 @@ HTML = """<!doctype html>
       position: absolute;
       width: 22px;
       height: 22px;
-      border: 3px solid #ffeb3b;
+      border: 3px solid var(--yellow);
       border-radius: 50%;
       transform: translate(-50%, -50%);
       pointer-events: none;
       opacity: 0;
-      transition: opacity 0.15s ease;
+      transition: opacity .15s ease;
       box-sizing: border-box;
       z-index: 10;
     }
@@ -222,108 +473,307 @@ HTML = """<!doctype html>
     .touch-marker.show {
       opacity: 1;
     }
+
+    .console-footer {
+      grid-column: 1 / -1;
+      grid-row: 3;
+      min-height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 15px;
+      padding: 7px 16px;
+      background: #0d1117;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .footer-left,
+    .footer-right {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 0;
+    }
+
+    .footer-item {
+      white-space: nowrap;
+    }
+
+    .touch-state {
+      color: #c5ced8;
+    }
+
+    .small {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    @media (max-width: 800px) {
+      .wrap {
+        display: flex;
+        min-height: 100vh;
+        flex-direction: column;
+      }
+
+      .console-header {
+        width: 100%;
+        height: auto;
+        min-height: 52px;
+        padding: 9px 12px;
+      }
+
+      .brand-subtitle {
+        display: none;
+      }
+
+      .status {
+        max-width: 48vw;
+        font-size: 11px;
+      }
+
+      .sidebar {
+        width: 100%;
+        overflow: visible;
+        padding: 10px;
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .toolbar {
+        grid-template-columns: repeat(3, 1fr);
+      }
+
+      #touchControlBtn {
+        grid-column: auto;
+      }
+
+      .flow-list {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .ministry-group {
+        grid-column: 1 / -1;
+        margin-left: 8px;
+      }
+
+      .main-panel {
+        width: 100%;
+        overflow: visible;
+        padding: 8px;
+      }
+
+      .screen-wrap,
+      #screen {
+        max-height: none;
+        max-width: 100%;
+      }
+
+      .console-footer {
+        width: 100%;
+        flex-wrap: wrap;
+      }
+
+      .footer-right {
+        display: none;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .toolbar {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .flow-list {
+        grid-template-columns: 1fr;
+      }
+
+      .heal-row {
+        grid-template-columns: minmax(0, 1fr) 70px 46px;
+      }
+
+      .brand-title {
+        font-size: 13px;
+      }
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <div class="status" id="status">Connessione…</div>
 
-    <div class="toolbar">
-      <button class="danger" id="closeBtn" onclick="closeGame()">Chiudi gioco</button>
-      <button id="tapIconBtn" onclick="tapLastZIcon()">Premi icona Last Z</button>
-      <button id="calibraBtn" onclick="calibra()">CALIBRA</button>
-      <button id="backBtn" onclick="androidBack()">BACK</button>
-      <button id="homeBtn" onclick="androidHome()">HOME</button>
-      <button id="touchControlBtn" onclick="toggleTouchControl()">📱 CONTROLLO TOUCH: OFF</button>
-      <input id="healBatchInput" type="number" min="1" step="1" placeholder="Heal batch" />
-      <button id="healBatchBtn" onclick="setHealBatch()">Set heal batch</button>
-      <label class="flow-switch">
-        <input id="treasureSwitch" type="checkbox" onchange="setFlowEnabled('treasure', this.checked)">
-        <span>TREASURE</span>
-      </label>
+    <header class="console-header">
+      <div class="brand">
+        <div class="brand-mark"></div>
+        <div>
+          <div class="brand-title">LASTZALERT CONTROL CONSOLE</div>
+          <div class="brand-subtitle">Android automation monitor</div>
+        </div>
+      </div>
 
-      <label class="flow-switch">
-        <input id="hqSwitch" type="checkbox" onchange="setFlowEnabled('hq', this.checked)">
-        <span>HQ</span>
-      </label>
+      <div class="status" id="status">Connessione…</div>
+    </header>
 
-      <label class="flow-switch">
-        <input id="healSwitch" type="checkbox" onchange="setFlowEnabled('heal', this.checked)">
-        <span>HEAL</span>
-      </label>
+    <aside class="sidebar">
 
-      <label class="flow-switch">
-        <input id="donationSwitch" type="checkbox" onchange="setFlowEnabled('donation', this.checked)">
-        <span>DONATION</span>
-      </label>
+      <section class="section">
+        <div class="section-title">Game control</div>
 
-      <label class="flow-switch">
-        <input id="ministrySwitch" type="checkbox" onchange="setFlowEnabled('ministry', this.checked)">
-        <span>MINISTRY</span>
-      </label>
+        <div class="toolbar">
+          <button class="primary" id="tapIconBtn" onclick="tapLastZIcon()">▶ START</button>
+          <button class="danger" id="closeBtn" onclick="closeGame()">■ CLOSE</button>
 
-      <label class="flow-switch">
-        <input id="ministryConstructionSwitch" type="checkbox" onchange="setMinistryEnabled('construction', this.checked)">
-        <span>↳ CONSTRUCTION</span>
-      </label>
+          <button id="homeBtn" onclick="androidHome()">⌂ HOME</button>
+          <button id="backBtn" onclick="androidBack()">← BACK</button>
 
-      <label class="flow-switch">
-        <input id="ministryScienceSwitch" type="checkbox" onchange="setMinistryEnabled('science', this.checked)">
-        <span>↳ SCIENCE</span>
-      </label>
+          <button id="calibraBtn" onclick="calibra()">◎ CALIBRATE</button>
 
-      <label class="flow-switch">
-        <input id="ministryAgricultureSwitch" type="checkbox" onchange="setMinistryEnabled('agriculture', this.checked)">
-        <span>↳ AGRICULTURE</span>
-      </label>
+          <button
+            id="allWorkflowsBtn"
+            class="master-workflows"
+            onclick="toggleAllWorkflows()"
+          >⚡ ALL WF: ON</button>
 
-      <label class="flow-switch">
-        <input id="forziereSwitch" type="checkbox" onchange="setFlowEnabled('forziere', this.checked)">
-        <span>FORZIERE</span>
-      </label>
+          <button id="touchControlBtn" onclick="toggleTouchControl()">📱 CONTROLLO TOUCH: OFF</button>
+        </div>
+      </section>
 
-      <label class="flow-switch">
-        <input id="genericSwitch" type="checkbox" onchange="setFlowEnabled('generic', this.checked)">
-        <span>GENERIC</span>
-      </label>
+      <section class="section">
+        <div class="section-title">Workflows</div>
 
-      <label class="flow-switch">
-        <input id="researchSwitch" type="checkbox" onchange="setFlowEnabled('research', this.checked)">
-        <span>RESEARCH</span>
-      </label>
+        <div class="flow-list">
 
-      <label class="flow-switch">
-        <input id="rallySwitch" type="checkbox" onchange="setFlowEnabled('rally', this.checked)">
-        <span>RALLY</span>
-      </label>
+          <label class="flow-switch">
+            <span>TREASURE</span>
+            <input id="treasureSwitch" type="checkbox"
+                   onchange="setFlowEnabled('treasure', this.checked)">
+          </label>
 
-      <label class="flow-switch">
-        <input id="heroSwitch" type="checkbox" onchange="setFlowEnabled('hero', this.checked)">
-        <span>HERO</span>
-      </label>
+          <label class="flow-switch">
+            <span>HQ</span>
+            <input id="hqSwitch" type="checkbox"
+                   onchange="setFlowEnabled('hq', this.checked)">
+          </label>
 
-      <label class="flow-switch">
-        <input id="bountySwitch" type="checkbox" onchange="setFlowEnabled('bounty', this.checked)">
-        <span>BOUNTY</span>
-      </label>
-    </div>
-    <div class="screen-wrap" id="screenWrap">
-      <img
-        id="screen"
-        src="/image?v=init"
-        alt="screen_treasure.png"
-        draggable="false"
-      />
-      <div id="touchMarker" class="touch-marker"></div>
-    </div>
+          <div class="heal-row">
+            <label class="flow-switch">
+              <span>HEAL</span>
+              <input id="healSwitch" type="checkbox"
+                     onchange="setFlowEnabled('heal', this.checked)">
+            </label>
 
-    <div class="small" id="touchHelp">
-      Controllo touch disattivato
-    </div>
-    <div class="small">File monitorato: debug/screen_treasure.png</div>
-    <div class="small">Template icona: boot/boot_icon.png</div>
-    <div class="small">Heal batch: heal_batch.txt</div>
-    <div class="small">Controllo gioco: <span id="modeLabel"></span></div>
+            <input id="healBatchInput"
+                   type="number"
+                   min="1"
+                   step="1"
+                   placeholder="Batch">
+
+            <button id="healBatchBtn"
+                    onclick="setHealBatch()">SET</button>
+          </div>
+
+          <label class="flow-switch">
+            <span>DONATION</span>
+            <input id="donationSwitch" type="checkbox"
+                   onchange="setFlowEnabled('donation', this.checked)">
+          </label>
+
+          <label class="flow-switch">
+            <span>MINISTRY</span>
+            <input id="ministrySwitch" type="checkbox"
+                   onchange="setFlowEnabled('ministry', this.checked)">
+          </label>
+
+          <div class="ministry-group">
+            <label class="flow-switch">
+              <span>CONSTRUCTION</span>
+              <input id="ministryConstructionSwitch"
+                     type="checkbox"
+                     onchange="setMinistryEnabled('construction', this.checked)">
+            </label>
+
+            <label class="flow-switch">
+              <span>AGRICULTURE</span>
+              <input id="ministryAgricultureSwitch"
+                     type="checkbox"
+                     onchange="setMinistryEnabled('agriculture', this.checked)">
+            </label>
+
+            <label class="flow-switch">
+              <span>SCIENCE</span>
+              <input id="ministryScienceSwitch"
+                     type="checkbox"
+                     onchange="setMinistryEnabled('science', this.checked)">
+            </label>
+          </div>
+
+          <label class="flow-switch">
+            <span>FORZIERE</span>
+            <input id="forziereSwitch" type="checkbox"
+                   onchange="setFlowEnabled('forziere', this.checked)">
+          </label>
+
+          <label class="flow-switch">
+            <span>RESEARCH</span>
+            <input id="researchSwitch" type="checkbox"
+                   onchange="setFlowEnabled('research', this.checked)">
+          </label>
+
+          <label class="flow-switch">
+            <span>RALLY</span>
+            <input id="rallySwitch" type="checkbox"
+                   onchange="setFlowEnabled('rally', this.checked)">
+          </label>
+
+          <label class="flow-switch">
+            <span>HERO</span>
+            <input id="heroSwitch" type="checkbox"
+                   onchange="setFlowEnabled('hero', this.checked)">
+          </label>
+
+          <label class="flow-switch">
+            <span>BOUNTY</span>
+            <input id="bountySwitch" type="checkbox"
+                   onchange="setFlowEnabled('bounty', this.checked)">
+          </label>
+
+          <label class="flow-switch">
+            <span>GENERIC</span>
+            <input id="genericSwitch" type="checkbox"
+                   onchange="setFlowEnabled('generic', this.checked)">
+          </label>
+
+        </div>
+      </section>
+
+    </aside>
+
+    <main class="main-panel">
+      <div class="screen-wrap" id="screenWrap">
+        <img
+          id="screen"
+          src="/image?v=init"
+          alt="screen_treasure.png"
+          draggable="false"
+        />
+        <div id="touchMarker" class="touch-marker"></div>
+      </div>
+    </main>
+
+    <footer class="console-footer">
+      <div class="footer-left">
+        <span class="touch-state" id="touchHelp">Controllo touch disattivato</span>
+        <span class="footer-item">Mode: <strong id="modeLabel"></strong></span>
+      </div>
+
+      <div class="footer-right">
+        <span class="footer-item">debug/screen_treasure.png</span>
+        <span class="footer-item">boot/boot_icon.png</span>
+        <span class="footer-item">heal_batch.txt</span>
+      </div>
+    </footer>
+
   </div>
 
   <script>
@@ -332,6 +782,7 @@ HTML = """<!doctype html>
     const closeBtn = document.getElementById("closeBtn");
     const tapIconBtn = document.getElementById("tapIconBtn");
     const calibraBtn = document.getElementById("calibraBtn");
+    const allWorkflowsBtn = document.getElementById("allWorkflowsBtn");
     const backBtn = document.getElementById("backBtn");
     const homeBtn = document.getElementById("homeBtn");
     const healBatchInput = document.getElementById("healBatchInput");
@@ -360,6 +811,125 @@ HTML = """<!doctype html>
       science: document.getElementById("ministryScienceSwitch"),
       agriculture: document.getElementById("ministryAgricultureSwitch")
     };
+
+    function updateAllWorkflowsButton() {
+      const switches = [
+        ...Object.values(flowSwitches),
+        ...Object.values(ministrySwitches)
+      ].filter(Boolean);
+
+      const enabledCount =
+        switches.filter(sw => sw.checked).length;
+
+      const allEnabled =
+        switches.length > 0 &&
+        enabledCount === switches.length;
+
+      const allDisabled =
+        enabledCount === 0;
+
+      allWorkflowsBtn.classList.remove(
+        "master-off",
+        "master-partial"
+      );
+
+      if (allEnabled) {
+        allWorkflowsBtn.textContent = "⚡ ALL WF: ON";
+        allWorkflowsBtn.title =
+          "Click to disable all workflows";
+
+      } else if (allDisabled) {
+        allWorkflowsBtn.textContent = "⚡ ALL WF: OFF";
+        allWorkflowsBtn.classList.add("master-off");
+        allWorkflowsBtn.title =
+          "Click to enable all workflows";
+
+      } else {
+        allWorkflowsBtn.textContent =
+          "⚡ ALL WF: " +
+          enabledCount +
+          "/" +
+          switches.length;
+
+        allWorkflowsBtn.classList.add(
+          "master-partial"
+        );
+
+        allWorkflowsBtn.title =
+          "Click to enable all workflows";
+      }
+    }
+
+
+    async function toggleAllWorkflows() {
+      const switches = [
+        ...Object.values(flowSwitches),
+        ...Object.values(ministrySwitches)
+      ].filter(Boolean);
+
+      const allEnabled =
+        switches.length > 0 &&
+        switches.every(sw => sw.checked);
+
+      // If everything is ON -> switch everything OFF.
+      // Otherwise -> switch everything ON.
+      const newState = !allEnabled;
+
+      allWorkflowsBtn.disabled = true;
+
+      setStatus(
+        newState
+          ? "Attivazione di tutti i workflow…"
+          : "Disattivazione di tutti i workflow…"
+      );
+
+      try {
+        for (const [flow, sw] of Object.entries(flowSwitches)) {
+          if (sw.checked !== newState) {
+            await setFlowEnabled(flow, newState);
+          }
+        }
+
+        for (const [ministry, sw] of Object.entries(ministrySwitches)) {
+          if (sw.checked !== newState) {
+            await setMinistryEnabled(
+              ministry,
+              newState
+            );
+          }
+        }
+
+        updateAllWorkflowsButton();
+
+        const finalSwitches = [
+          ...Object.values(flowSwitches),
+          ...Object.values(ministrySwitches)
+        ].filter(Boolean);
+
+        const success =
+          finalSwitches.every(
+            sw => sw.checked === newState
+          );
+
+        if (success) {
+          setStatus(
+            newState
+              ? "Tutti i workflow sono ON"
+              : "Tutti i workflow sono OFF",
+            "ok"
+          );
+        } else {
+          setStatus(
+            "Alcuni workflow non hanno cambiato stato",
+            "err"
+          );
+        }
+
+      } finally {
+        allWorkflowsBtn.disabled = false;
+        updateAllWorkflowsButton();
+      }
+    }
 
     let touchControlEnabled = false;
     let gestureStart = null;
@@ -917,6 +1487,8 @@ HTML = """<!doctype html>
             sw.checked = data.ministries[ministry] !== false;
           });
         }
+
+        updateAllWorkflowsButton();
         
       } catch (e) {
         modeLabel.textContent = "errore";
@@ -969,6 +1541,7 @@ HTML = """<!doctype html>
 
       } finally {
         sw.disabled = false;
+        updateAllWorkflowsButton();
       }
     }
 
@@ -1157,6 +1730,7 @@ HTML = """<!doctype html>
 
       } finally {
         sw.disabled = false;
+        updateAllWorkflowsButton();
       }
     }
 
