@@ -1,20 +1,82 @@
 # LastZAlert
-# pre-requirement software:
 
-sudo apt update
-sudo apt install python3-venv python3-full
-sudo apt install android-tools-adb
-sudo apt install tesseract-ocr
+LastZAlert is a Python automation project for **Last Z: Survival Shooter** running on an Android device.
 
-python3 -m venv venv
-source venv/bin/activate
-pip install opencv-python
-pip install easyocr
-pip install pytesseract
-pip install requests
+The bot uses ADB, screenshots, OpenCV/OCR and image matching to detect game elements and execute automated workflows.
 
-# Run the game
-1. run the game on your phone
-2. connect the phone to this pc
-3. chmod +x lastz_treasure_watcher.py
-4. ./lastz_treasure_watcher.py
+## Requirements
+
+Tested on Ubuntu Linux with Python 3.
+
+Install the required system packages:
+
+    sudo apt update
+    sudo apt install -y git python3 python3-full python3-venv android-tools-adb tesseract-ocr
+
+## Installation
+
+Clone the repository:
+
+    git clone https://github.com/Auwia/LastZAlert.git
+    cd LastZAlert
+
+Create the environment and install dependencies:
+
+    ./setup_env.sh
+
+Activate the environment:
+
+    source venv/bin/activate
+
+## Android / ADB
+
+Enable Developer options and USB debugging on the Android device.
+
+Connect the phone and verify the connection:
+
+    adb devices
+
+The device must appear with status `device`.
+
+Wireless ADB can also be used if it is already configured on the Android device.
+
+## Discord notifications
+
+Discord notifications are optional.
+
+The setup script creates `.env` from `.env.example`.
+
+Configure your webhook only inside `.env`:
+
+    DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+
+**Never put a real webhook URL directly in the source code or commit it to Git.**
+
+The `.env` file is ignored by Git.
+
+## Security
+
+The repository includes a pre-commit security hook that checks staged changes for known secret patterns, including Discord webhook URLs and private keys.
+
+The setup script enables it automatically.
+
+## Run LastZAlert
+
+Start the game on the Android device, then:
+
+    source venv/bin/activate
+    ./lastz_treasure_watcher.py
+
+Stop the bot with `Ctrl+C`.
+
+## Updating
+
+Pull the latest version and update dependencies:
+
+    git pull
+    source venv/bin/activate
+    python -m pip install -r requirements.txt
+
+## License
+
+This project is licensed under the MIT License. See `LICENSE` for details.
