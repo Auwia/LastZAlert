@@ -1916,6 +1916,7 @@ def main() -> None:
         print("\n[!] Stop richiesto.")
         stop_evt.set()
 
+        print_perf_stats()
     
         if not ENABLE_SCREENSHOT_DRIVEN_ENGINE:
             time.sleep(1)

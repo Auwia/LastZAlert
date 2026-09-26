@@ -11,7 +11,7 @@ from enum import Enum
 from typing import Optional
 
 from workflow_manager import Workflow, WORKFLOW_MANAGER
-from bot_utils import adb_tap, crop_roi, match_any, load_templates, load_image
+from bot_utils import adb_tap, crop_roi, match_any, load_templates, load_image, adb_swipe
 from flow_control import get_all_ministry_states
 
 # ============================================================
@@ -1396,7 +1396,6 @@ class MinistryFlow:
             return
 
         if self.state == MinistryState.SCROLL_UP:
-            from bot_utils import adb_swipe
             self.log("[MINISTRY][SCROLL_UP] enter")
             adb_swipe(1000, 2000, 1000, 1000, 300)
             self.log("[MINISTRY][SCROLL_UP] swipe done → TAP_SCIENCE")
