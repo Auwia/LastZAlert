@@ -22,6 +22,7 @@ from hero_flow import HeroFlow
 from ministry_flow import MinistryFlow
 from rally_flow import RallyFlow, RALLY_TRIGGER_ROI
 from research_flow import ResearchFlow
+from tank_flow import TankFlow
 from simple_events import SIMPLE_EVENTS
 from treasure_flow_simplified import TreasureFlowSimplified
 from workflow_manager import WORKFLOW_MANAGER, Workflow
@@ -76,6 +77,26 @@ HERO_START_WINDOW_MINUTES = 10
 HERO_LAST_RUN_PATH = os.path.join(BASE_DIR, "hero_last_run.txt")
 
 ENABLE_MULTI_RESOURCE_COLLECTION = True
+
+# TANK: domenica dalle 04:15 alle 04:59.
+ENABLE_TANK_FLOW = True
+TANK_LAST_RUN_PATH = os.path.join(BASE_DIR, "tank_last_run.txt")
+
+
+def _tank_already_ran_today(now):
+    try:
+        with open(TANK_LAST_RUN_PATH, encoding="utf-8") as f:
+            return f.read().strip() == now.strftime("%Y-%m-%d")
+    except FileNotFoundError:
+        return False
+
+
+def _mark_tank_completed_today():
+    today = datetime.now().strftime("%Y-%m-%d")
+    with open(TANK_LAST_RUN_PATH, "w", encoding="utf-8") as f:
+        f.write(today + "\n")
+    log_event(f"[TANK] completed today={today}")
+
 
 
 
@@ -364,7 +385,25 @@ def match_any_fast_scaled(roi_img, templates, scale=0.5):
     if roi_img is None or roi_img.size == 0:
         return None, 0.0, (0, 0), (0, 0)
 
-    small_roi = cv2.resize(roi_img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    perf_total_t0 = time.time() if DEBUG else None
+
+    # 1) Resize ROI
+    perf_t0 = time.time() if DEBUG else None
+
+    small_roi = cv2.resize(
+        roi_img,
+        None,
+        fx=scale,
+        fy=scale,
+        interpolation=cv2.INTER_AREA
+    )
+
+    if DEBUG:
+        perf_resize_roi = time.time() - perf_t0
+
+    # 2) Resize templates
+    perf_t0 = time.time() if DEBUG else None
+
     scaled_templates = []
 
     for name, tmpl in templates:
@@ -376,11 +415,36 @@ def match_any_fast_scaled(roi_img, templates, scale=0.5):
         )
         scaled_templates.append((name, tmpl_s))
 
+    if DEBUG:
+        perf_resize_templates = time.time() - perf_t0
+
+    # 3) Template matching
+    perf_t0 = time.time() if DEBUG else None
+
     name, score, loc, hw = match_any(small_roi, scaled_templates)
+
+    if DEBUG:
+        perf_match = time.time() - perf_t0
+        perf_total = time.time() - perf_total_t0
+
+        log_event(
+            f"[FAST-PERF] scale={scale:.2f} "
+            f"templates={len(templates):2d} "
+            f"roi_resize={perf_resize_roi:.4f}s "
+            f"tmpl_resize={perf_resize_templates:.4f}s "
+            f"match={perf_match:.4f}s "
+            f"total={perf_total:.4f}s"
+        )
+
     if name is None:
         return None, score, loc, hw
 
-    return name, score, (int(loc[0] / scale), int(loc[1] / scale)), (int(hw[0] / scale), int(hw[1] / scale))
+    return (
+        name,
+        score,
+        (int(loc[0] / scale), int(loc[1] / scale)),
+        (int(hw[0] / scale), int(hw[1] / scale))
+    )
 
 
 def tap_match_in_fullscreen(roi_coords, match_loc, tmpl_hw):
@@ -417,17 +481,48 @@ def send_notification(text: str) -> bool:
 
 
 def timed_tick(name, fn, *args):
+    if not DEBUG:
+        return fn(*args)
+
     t0 = time.time()
     try:
         return fn(*args)
     finally:
         dur = time.time() - t0
-        stats = _perf_tick_stats.setdefault(name, {"count": 0, "total": 0.0, "max": 0.0})
+        stats = _perf_tick_stats.setdefault(
+            name,
+            {"count": 0, "total": 0.0, "max": 0.0}
+        )
         stats["count"] += 1
         stats["total"] += dur
         stats["max"] = max(stats["max"], dur)
-        if DEBUG and dur >= 0.30:
+
+        if dur >= 0.30:
             log_event(f"[SLOW-TICK] {name} dur={dur:.2f}s")
+
+
+def print_perf_stats():
+    if not DEBUG or not _perf_tick_stats:
+        return
+
+    log_event("[PERF] ===== TICK STATS =====")
+
+    for name, stats in _perf_tick_stats.items():
+        count = stats["count"]
+        total = stats["total"]
+        max_dur = stats["max"]
+        avg = total / count if count else 0.0
+
+        log_event(
+            f"[PERF] {name:<15} "
+            f"count={count:6d} "
+            f"avg={avg:.4f}s "
+            f"max={max_dur:.4f}s "
+            f"total={total:.2f}s"
+        )
+
+    log_event("[PERF] ======================")
+
 
 # ============================================================
 # SCREENSHOT PRODUCER
@@ -472,6 +567,9 @@ def capture_fresh_frame():
     tmp_path = SCREENSHOT_PATH + ".frame.tmp"
 
     try:
+        perf_total_t0 = time.time() if DEBUG else None
+        perf_adb_t0 = time.time() if DEBUG else None
+
         proc = subprocess.run(
             [ADB_CMD, "exec-out", "screencap", "-p"],
             stdout=subprocess.PIPE,
@@ -479,6 +577,9 @@ def capture_fresh_frame():
             timeout=30,
             check=False,
         )
+
+        if DEBUG:
+            perf_adb = time.time() - perf_adb_t0
 
         if proc.returncode != 0 or not proc.stdout:
             err = proc.stderr.decode("utf-8", errors="ignore")
@@ -495,12 +596,23 @@ def capture_fresh_frame():
 
         SCREENSHOT_ERROR_COUNT = 0
 
+        perf_file_t0 = time.time() if DEBUG else None
+
         with open(tmp_path, "wb") as f:
             f.write(proc.stdout)
 
         with SCREENSHOT_LOCK:
             os.replace(tmp_path, SCREENSHOT_PATH)
+
+        if DEBUG:
+            perf_file = time.time() - perf_file_t0
+            perf_decode_t0 = time.time()
+
+        with SCREENSHOT_LOCK:
             img = cv2.imread(SCREENSHOT_PATH, cv2.IMREAD_COLOR)
+
+        if DEBUG:
+            perf_decode = time.time() - perf_decode_t0
 
         if img is None:
             log_event("[FRAME] screenshot acquisito ma cv2.imread fallita")
@@ -509,9 +621,21 @@ def capture_fresh_frame():
         _frame_counter += 1
 
         if DEBUG:
+            perf_total = time.time() - perf_total_t0
+            perf_mb = len(proc.stdout) / (1024 * 1024)
+
             log_event(
                 f"[FRAME {_frame_counter:06d}] "
                 f"captured {img.shape[1]}x{img.shape[0]}"
+            )
+
+            log_event(
+                f"[FRAME-PERF] "
+                f"adb={perf_adb:.3f}s "
+                f"file={perf_file:.3f}s "
+                f"decode={perf_decode:.3f}s "
+                f"total={perf_total:.3f}s "
+                f"bytes={perf_mb:.2f}MB"
             )
 
         return img
@@ -721,6 +845,44 @@ def forziere_tick(img=None) -> None:
 
     flow.step(img)
 
+def tank_tick(img=None) -> None:
+    flow = flows.get("tank")
+    if flow is not None:
+        flow.step(img)
+
+
+def maybe_trigger_tank(img=None) -> None:
+    if not ENABLE_TANK_FLOW:
+        return
+
+    flow = flows.get("tank")
+    if flow is None or flow.state.name != "IDLE":
+        return
+
+    now = datetime.now()
+
+    if now.weekday() != 6:
+        return
+
+    if now.hour != 4 or now.minute < 15:
+        return
+
+    if _tank_already_ran_today(now):
+        return
+
+    if not WORKFLOW_MANAGER.is_idle():
+        return
+
+    if img is None or not hq_view_visible(img):
+        return
+
+    if flow.trigger():
+        log_event(
+            f"[TANK] weekly trigger -> "
+            f"{now.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+
+
 def hero_tick(img=None) -> None:
     flow = flows.get("hero")
     if flow is None:
@@ -805,10 +967,32 @@ def simple_event_watcher_tick(stop_evt: threading.Event, img=None) -> bool:
                 continue
 
             roi_img, roi_coords = crop_roi(img, cfg["roi"])
+
+            perf_t0 = time.time() if DEBUG else None
+
             if ev_name in ("confirm_popup", "cancel_popup"):
-                name_t, score, loc, hw = match_any_fast_scaled(roi_img, templates, scale=0.35)
+                name_t, score, loc, hw = match_any_fast_scaled(
+                    roi_img, templates, scale=0.35
+                )
             else:
                 name_t, score, loc, hw = match_any(roi_img, templates)
+
+            if DEBUG:
+                perf_dur = time.time() - perf_t0
+                log_event(
+                    f"[SIMPLE-PERF] {ev_name:<16} "
+                    f"templates={len(templates):2d} "
+                    f"dur={perf_dur:.4f}s "
+                    f"score={score:.3f}"
+                )
+
+            if DEBUG and ev_name == "cancel_popup" and score >= cfg["threshold"]:
+                log_event(
+                    f"[CANCEL-POS] template={name_t} "
+                    f"score={score:.3f} "
+                    f"loc={loc} "
+                    f"size={hw}"
+                )
 
             if score < cfg["threshold"]:
                 continue
@@ -1157,6 +1341,10 @@ def init_flows():
         log_event,
         on_complete=_mark_hero_completed_today,
     )
+    flows["tank"] = TankFlow(
+        log_event,
+        on_complete=_mark_tank_completed_today,
+    )
     flows["rally"] = RallyFlow(log_event)
     flows["treasure"] = TreasureFlowSimplified(log_event)
     flows["research"] = init_research_flow()
@@ -1389,7 +1577,10 @@ def screenshot_driven_run_active_workflow(
             f"active workflow={active.name}"
         )
 
-    if active == Workflow.TREASURE:
+    if active == Workflow.TANK:
+        timed_tick("TANK", tank_tick, img)
+
+    elif active == Workflow.TREASURE:
         timed_tick("TREASURE-FLOW", treasure_flow_tick, img)
 
     elif active == Workflow.HEAL:
@@ -1457,6 +1648,12 @@ def run_screenshot_driven_engine(
         # 3. NESSUN WF ATTIVO:
         #    SCANSIONE SEQUENZIALE
         # ====================================================
+
+        maybe_trigger_tank(img)
+
+        if any_workflow_active():
+            time.sleep(SCREENSHOT_DRIVEN_DELAY_SEC)
+            continue
 
         timed_tick(
             "TREASURE-DETECT",
@@ -1718,6 +1915,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\n[!] Stop richiesto.")
         stop_evt.set()
+
     
         if not ENABLE_SCREENSHOT_DRIVEN_ENGINE:
             time.sleep(1)

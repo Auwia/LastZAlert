@@ -2,6 +2,7 @@ import threading
 from enum import IntEnum
 
 class Workflow(IntEnum):
+    TANK     = 11
     TREASURE = 10
     HQ       = 9
     HEAL     = 8
