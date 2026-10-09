@@ -27,6 +27,7 @@ SWIPES = (
     (650, 950, 350, 1250, 600),
 )
 
+TANK_USE_SWIPES = False  # True = 3 swipes, False = direct search
 MAX_SWIPES = len(SWIPES)
 MAX_UPGRADES = 4
 STALL_TIMEOUT_SEC = 120
@@ -149,7 +150,7 @@ class TankFlow:
         # ==================================================
         if self.state == TankState.FIND_LADY:
 
-            if self.swipes < MAX_SWIPES:
+            if TANK_USE_SWIPES and self.swipes < MAX_SWIPES:
                 coords = SWIPES[self.swipes]
 
                 adb_swipe(*coords)
