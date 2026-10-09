@@ -376,12 +376,7 @@ def _extract_level(text):
     cleaned = cleaned.replace(" ", "")
     cleaned = cleaned.replace("\n", "")
 
-    # Prima prova con Lv.xxx
-    m = re.search(r"L[VW][.\-:]?(\d{2,3})", cleaned)
-
-    # Fallback: OCR può perdere "Lv."
-    if not m:
-        m = re.search(r"(\d{2,3})", cleaned)
+    m = re.search(r"(?:L?[VW][.\-:]?)?(\d{3})", cleaned)
 
     if not m:
         return None
@@ -754,51 +749,42 @@ class HeroFlow:
             # Manteniamo l'ultimo livello letto per riconoscere il cambio
             # anche se capita esattamente tra due schermate dopo lo scroll.
             self.previous_level = hits[-1]["level"]
-
-            # Caso richiesto: tutti gli eroi visibili hanno lo stesso livello.
-            if len(set(levels)) == 1:
-                if self.scroll_count >= MAX_SCROLLS:
-                    self._release(
-                        completed=False,
-                        reason="raggiunto MAX_SCROLLS senza trovare livello -5 -> release",
-                    )
-                    return
-
-                h, w = img.shape[:2]
-
-                self.before_scroll_signature = current_signature
-                self.waiting_after_scroll = True
-                self.scroll_count += 1
-
-                x = int(w * SWIPE_X_FRAC)
-                y1 = int(h * SWIPE_FROM_Y_FRAC)
-                y2 = int(h * SWIPE_TO_Y_FRAC)
-
-                self.log(
-                    f"[HERO-FLOW] tutti stesso livello Lv.{levels[0]} "
-                    f"-> scroll {self.scroll_count}/{MAX_SCROLLS}"
+            
+            # Nessun salto -5 nella schermata corrente:
+            # continuiamo a scorrere per cercare altre card.
+            if self.scroll_count >= MAX_SCROLLS:
+                self._release(
+                    completed=False,
+                    reason="raggiunto MAX_SCROLLS senza trovare livello -5 -> release",
                 )
-
-                _adb_swipe(
-                    x, y1,
-                    x, y2,
-                    SWIPE_DURATION_MS,
-                )
-
-                time.sleep(AFTER_SCROLL_WAIT_SEC)
-                self._mark()
                 return
-
-            # Se l'OCR vede livelli diversi ma non esiste un salto esatto di 5,
-            # non scegliamo un eroe a caso.
-            self._release(
-                completed=False,
-                reason=(
-                    "livelli diversi ma nessun salto esatto di 5 "
-                    f"({levels}) -> release"
-                ),
+            
+            h, w = img.shape[:2]
+            
+            self.before_scroll_signature = current_signature
+            self.waiting_after_scroll = True
+            self.scroll_count += 1
+            
+            x = int(w * SWIPE_X_FRAC)
+            y1 = int(h * SWIPE_FROM_Y_FRAC)
+            y2 = int(h * SWIPE_TO_Y_FRAC)
+            
+            self.log(
+                f"[HERO-FLOW] nessun salto -5 trovato "
+                f"nei livelli {levels} "
+                f"-> scroll {self.scroll_count}/{MAX_SCROLLS}"
             )
+            
+            _adb_swipe(
+                x, y1,
+                x, y2,
+                SWIPE_DURATION_MS,
+            )
+            
+            time.sleep(AFTER_SCROLL_WAIT_SEC)
+            self._mark()
             return
+
 
         # --------------------------------------------------------
         # 4. Upgrade x5
