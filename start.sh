@@ -1,5 +1,32 @@
 #!/usr/bin/env bash
 
+# Recover project dependencies after Python upgrades
+if ! ./venv/bin/python -c "import requests" >/dev/null 2>&1; then
+    echo "[SETUP] Python dependencies missing. Installing..."
+    if [ -f requirements.txt ]; then
+        ./venv/bin/python -m pip install -r requirements.txt || exit 1
+    else
+        ./venv/bin/python -m pip install requests || exit 1
+    fi
+fi
+
+
+# Recover pip if missing from the virtual environment
+if ! ./venv/bin/python -m pip --version >/dev/null 2>&1; then
+    echo "[SETUP] pip missing. Recovering..."
+    ./venv/bin/python -m ensurepip --upgrade || {
+        echo "[ERROR] Cannot recover pip. Install python3-venv."
+        exit 1
+    }
+fi
+
+# Ensure OpenCV is available
+if ! ./venv/bin/python -c "import cv2" >/dev/null 2>&1; then
+    echo "[SETUP] OpenCV missing. Installing..."
+    ./venv/bin/python -m pip install opencv-python-headless || exit 1
+fi
+
+
 set -e
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,6 +49,7 @@ TOUCH_GRAB_REMOTE="/data/local/tmp/touch_grab"
 
 MONITOR_PID=""
 TOUCH_GRAB_PID=""
+BOT_PID=""
 CLEANED_UP=0
 
 cleanup() {
@@ -48,10 +76,18 @@ cleanup() {
     echo "[STOP] Releasing Android input device..."
     adb -s "$ADB_DEVICE" shell "pkill -INT touch_grab 2>/dev/null || pkill touch_grab 2>/dev/null || true" >/dev/null 2>&1 || true
 
+    if [ -n "$BOT_PID" ] && kill -0 "$BOT_PID" 2>/dev/null; then
+        echo "[STOP] Bot"
+        kill "$BOT_PID" 2>/dev/null || true
+        wait "$BOT_PID" 2>/dev/null || true
+    fi
+
     echo "=== All services stopped ==="
 }
 
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 if [ ! -x "venv/bin/python" ]; then
     echo "[ERROR] Python virtual environment not found."
@@ -79,6 +115,13 @@ fi
 echo "[ADB] Device connected."
 
 echo
+echo "[MONITOR] Checking port 8000..."
+
+if ss -ltn '( sport = :8000 )' | grep -q LISTEN; then
+    echo "[ERROR] Port 8000 is already in use."
+    exit 1
+fi
+
 echo "[TOUCH] Cleaning previous AndroidTouchGrab instance..."
 
 adb -s "$ADB_DEVICE" shell     "pkill -INT touch_grab 2>/dev/null || pkill touch_grab 2>/dev/null || true"     >/dev/null 2>&1 || true
@@ -100,11 +143,6 @@ fi
 echo "[TOUCH] AndroidTouchGrab running."
 
 echo
-echo "[MONITOR] Cleaning previous monitor instance..."
-
-pkill -f "$PROJECT_DIR/monitor/monitor.py" 2>/dev/null || true
-sleep 1
-
 echo "[MONITOR] Starting web monitor..."
 
 (
@@ -127,4 +165,33 @@ echo "[BOT] Starting LastZAlert..."
 echo "Press Ctrl+C to stop everything."
 echo
 
-"$PROJECT_DIR/venv/bin/python" "$PROJECT_DIR/lastz_treasure_watcher.py"
+"$PROJECT_DIR/venv/bin/python" "$PROJECT_DIR/lastz_treasure_watcher.py" &
+BOT_PID=$!
+
+echo "[BOT] Running PID=$BOT_PID"
+
+# Keep the monitor available even if the bot stops.
+while true; do
+    if ! kill -0 "$MONITOR_PID" 2>/dev/null; then
+        echo "[ERROR] Monitor stopped."
+        exit 1
+    fi
+
+    # Detect a terminated child, including an unreaped zombie.
+    if ! ps -p "$BOT_PID" -o stat= 2>/dev/null | grep -qv '^[[:space:]]*Z'; then
+        BOT_EXIT_CODE=0
+        wait "$BOT_PID" || BOT_EXIT_CODE=$?
+        BOT_PID=""
+
+        echo "[BOT] Stopped (exit code: $BOT_EXIT_CODE)"
+        echo "[MONITOR] Still running. Press Ctrl+C to stop everything."
+        break
+    fi
+
+    sleep 2
+done
+
+# Preserve monitor access after the bot exits.
+while kill -0 "$MONITOR_PID" 2>/dev/null; do
+    sleep 2
+done

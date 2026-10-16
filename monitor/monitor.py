@@ -33,12 +33,12 @@ from flow_control import (
 # CONFIG
 # =========================
 
-HOST = "192.168.0.55"
+HOST = "0.0.0.0"
 PORT = 8000
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-IMAGE_PATH = BASE_DIR / "debug" / "screen_treasure.png"
+IMAGE_PATH = BASE_DIR / "debug" / "screen_monitor.png"
 ICON_TEMPLATE_PATH = BASE_DIR / "boot" / "boot_icon.png"
 HEAL_BATCH_PATH = BASE_DIR / "heal_batch.txt"
 
@@ -510,6 +510,26 @@ HTML = """<!doctype html>
       font-size: 11px;
     }
 
+    .touch-exit-btn {
+      display: none;
+      position: fixed;
+      left: 12px;
+      bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+      z-index: 99999;
+      background: #b42318;
+      color: #fff;
+      border: 2px solid #ff6b6b;
+      border-radius: 10px;
+      padding: 14px 18px;
+      font-size: 15px;
+      font-weight: 800;
+      box-shadow: 0 8px 24px rgba(0,0,0,.55);
+    }
+
+    .touch-exit-btn.show {
+      display: block;
+    }
+
     @media (max-width: 800px) {
       .wrap {
         display: flex;
@@ -567,7 +587,7 @@ HTML = """<!doctype html>
 
       .screen-wrap,
       #screen {
-        max-height: none;
+        max-height: calc(100dvh - 135px);
         max-width: 100%;
       }
 
@@ -601,6 +621,10 @@ HTML = """<!doctype html>
   </style>
 </head>
 <body>
+  <button id="touchExitBtn" class="touch-exit-btn" onclick="forceTouchOff()">
+    TOUCH OFF
+  </button>
+
   <div class="wrap">
 
     <header class="console-header">
@@ -792,6 +816,7 @@ HTML = """<!doctype html>
     const screenWrap = document.getElementById("screenWrap");
     const touchMarker = document.getElementById("touchMarker");
     const touchHelp = document.getElementById("touchHelp");
+    const touchExitBtn = document.getElementById("touchExitBtn");
     const flowSwitches = {
       treasure: document.getElementById("treasureSwitch"),
       hq: document.getElementById("hqSwitch"),
@@ -958,6 +983,11 @@ HTML = """<!doctype html>
         ? "Tap · doppio tap · pressione lunga · trascina per swipe"
         : "Controllo touch disattivato";
 
+      touchExitBtn.classList.toggle(
+        "show",
+        touchControlEnabled
+      );
+
       if (!touchControlEnabled) {
         gestureStart = null;
         cancelPendingTap();
@@ -971,6 +1001,13 @@ HTML = """<!doctype html>
       );
     }
 
+
+
+    function forceTouchOff() {
+      if (touchControlEnabled) {
+        toggleTouchControl();
+      }
+    }
 
     function cancelPendingTap() {
       if (pendingTap && pendingTap.timer) {
@@ -1568,14 +1605,14 @@ HTML = """<!doctype html>
 
     async function tapLastZIcon() {
       tapIconBtn.disabled = true;
-      setStatus("Cerco l'icona Last Z sullo schermo…");
+      setStatus("Avvio Last Z tramite ADB…");
 
       try {
         const r = await fetch("/action/tap-lastz-icon", { method: "POST" });
         const data = await r.json();
 
         if (data.ok) {
-          setStatus("Icona premuta: " + data.detail, "ok");
+          setStatus("Avvio richiesto: " + data.detail, "ok");
         } else {
           setStatus("Errore: " + (data.error || "sconosciuto"), "err");
         }
@@ -2187,27 +2224,31 @@ def close_game():
 
 
 def tap_lastz_icon():
+    """
+    Launch Last Z directly using its Android package.
+    Works regardless of the currently visible screen.
+    """
     if CONTROL_MODE != "adb":
-        raise RuntimeError("tap_lastz_icon supporta solo CONTROL_MODE='adb'")
+        raise RuntimeError("tap_lastz_icon supports only CONTROL_MODE='adb'")
 
-    screen = adb_capture_screen_cv()
-    match = find_template_on_screen(screen, ICON_TEMPLATE_PATH)
+    package = "com.readygo.barrel.gp"
 
-    print(
-        f"[LASTZ ICON] score={match['score']:.3f} "
-        f"scale={match['scale']:.2f} "
-        f"center=({match['center_x']},{match['center_y']})"
+    print(f"[LASTZ LAUNCH] Starting package={package}", flush=True)
+
+    run_cmd(
+        adb_prefix() + [
+            "shell",
+            "monkey",
+            "-p", package,
+            "-c", "android.intent.category.LAUNCHER",
+            "1",
+        ]
     )
 
-    run_cmd(adb_prefix() + [
-        "shell", "input", "tap",
-        str(match["center_x"]), str(match["center_y"]),
-    ])
+    print("[LASTZ LAUNCH] Launch command completed", flush=True)
 
-    return (
-        f"tap su ({match['center_x']},{match['center_y']}) "
-        f"score={match['score']:.3f} scale={match['scale']:.2f}"
-    )
+    return f"Last Z launch requested: {package}"
+
 
 
 def calibra_bottom_right():
@@ -2516,15 +2557,18 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def serve_image(self):
-        if not IMAGE_PATH.exists():
-            msg = f"File non trovato: {IMAGE_PATH}\n".encode("utf-8")
-            return safe_send(self, 404, "text/plain; charset=utf-8", msg)
-
         try:
             data = IMAGE_PATH.read_bytes()
-        except Exception as e:
-            msg = f"Errore lettura immagine: {e}\n".encode("utf-8")
-            return safe_send(self, 500, "text/plain; charset=utf-8", msg)
+        except FileNotFoundError:
+            return safe_send(
+                self, 503, "text/plain; charset=utf-8",
+                b"Waiting for first Android screenshot"
+            )
+        except OSError as e:
+            return safe_send(
+                self, 500, "text/plain; charset=utf-8",
+                str(e).encode("utf-8")
+            )
 
         return safe_send(
             self,
@@ -2532,6 +2576,7 @@ class Handler(BaseHTTPRequestHandler):
             "image/png",
             data,
             {
+                "Cache-Control": "no-store, no-cache, must-revalidate",
                 "Pragma": "no-cache",
                 "Expires": "0",
             },
@@ -2565,7 +2610,54 @@ class Handler(BaseHTTPRequestHandler):
             return
 
 
+
+def independent_screenshot_loop():
+    """Capture Android screen independently from game workflows."""
+    import subprocess
+    import threading
+    import time
+
+    print("[SCREENSHOT] Independent ADB capture started", flush=True)
+
+    while True:
+        try:
+            result = subprocess.run(
+                adb_prefix() + ["exec-out", "screencap", "-p"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=15,
+            )
+
+            data = result.stdout
+
+            if result.returncode == 0 and data.startswith(
+                bytes.fromhex("89504e470d0a1a0a")
+            ):
+                temp = IMAGE_PATH.with_name("screen_monitor.tmp")
+                temp.write_bytes(data)
+                temp.replace(IMAGE_PATH)
+            else:
+                print(
+                    "[SCREENSHOT] Capture failed:",
+                    result.stderr.decode(errors="replace"),
+                    flush=True,
+                )
+
+        except Exception as e:
+            print(f"[SCREENSHOT] ERROR: {e}", flush=True)
+
+        time.sleep(1)
+
+
 def main():
+    import threading
+
+    threading.Thread(
+        target=independent_screenshot_loop,
+        name="monitor-screenshot",
+        daemon=True,
+    ).start()
+
     ThreadingHTTPServer.daemon_threads = True
     server = ThreadingHTTPServer((HOST, PORT), Handler)
 
