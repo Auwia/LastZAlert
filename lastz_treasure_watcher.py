@@ -1203,7 +1203,7 @@ def officer_icon_visible(img) -> bool:
     current_blocker = best_name if visible else None
 
     if current_blocker != _last_ministry_blocker_name:
-        if current_blocker is not None:
+        if current_blocker is not None and DEBUG:
             log_event(
                 f"[MINISTRY BLOCKER] detected={best_name} "
                 f"score={best_score:.3f} "
@@ -1417,12 +1417,9 @@ def maybe_trigger_ministry(img=None) -> None:
     if img is None:
         return
 
-    if not hq_view_visible(img):
-        if not DEBUG_EVENTS_ONLY:
-            log_event("[MINISTRY] skip trigger -> not HQ view")
-        return
+    blocker_visible = officer_icon_visible(img)
 
-    if officer_icon_visible(img):
+    if blocker_visible:
         if not DEBUG_EVENTS_ONLY:
             log_event("[MINISTRY] skip trigger -> officer/application already present")
         return
@@ -1612,6 +1609,52 @@ def screenshot_driven_run_active_workflow(
 
     return True
 
+
+# Game foreground check, cached to avoid running ADB every frame.
+LASTZ_PACKAGE = "com.readygo.barrel.gp"
+_GAME_CHECK_INTERVAL_SEC = 5.0
+_game_check_ts = 0.0
+_game_check_result = False
+
+
+def lastz_game_foreground():
+    global _game_check_ts, _game_check_result
+
+    now = time.monotonic()
+    if now - _game_check_ts < _GAME_CHECK_INTERVAL_SEC:
+        return _game_check_result
+
+    _game_check_ts = now
+
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            ["adb", "shell", "dumpsys", "window"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+
+        focus_lines = [
+            line for line in result.stdout.splitlines()
+            if "mCurrentFocus=" in line or "mFocusedApp=" in line
+        ]
+
+        _game_check_result = (
+            result.returncode == 0
+            and any(
+                LASTZ_PACKAGE + "/" in line
+                for line in focus_lines
+            )
+        )
+
+    except (OSError, subprocess.TimeoutExpired):
+        _game_check_result = False
+
+    return _game_check_result
+
+
 def run_screenshot_driven_engine(
     stop_evt: threading.Event,
     heal_flow: HealFlow
@@ -1624,6 +1667,11 @@ def run_screenshot_driven_engine(
         # ====================================================
         # 1. NUOVO FRAME
         # ====================================================
+
+        # No workflow activity while Last Z is not foreground.
+        if not lastz_game_foreground():
+            time.sleep(1.0)
+            continue
 
         img = capture_fresh_frame()
 

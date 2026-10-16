@@ -26,7 +26,7 @@ os.makedirs(DEBUG_DIR, exist_ok=True)
 
 # True = esegue tutto il flow ma NON preme realmente Upgrade.
 # False = i 5 tap su Upgrade vengono eseguiti davvero.
-DRY_RUN = True
+DRY_RUN = False
 
 # Hero icon nella vista HQ.
 # Coordinate frazionarie x/y.
@@ -78,7 +78,7 @@ SCROLL_DIFF_THRESHOLD = 2.5
 
 # Pulsante Upgrade nella pagina dettaglio eroe.
 UPGRADE_BUTTON_FRAC = (0.50, 0.87)
-UPGRADE_TAPS = 5
+UPGRADE_TAPS = 1
 UPGRADE_TAP_PAUSE = 0.40
 
 OPEN_HEROES_WAIT_SEC = 2.0
@@ -551,7 +551,7 @@ def find_first_drop_by_five(heroes, previous_level=None):
     for hero in heroes:
         current = hero["level"]
 
-        if prev is not None and (prev - current) == 5:
+        if prev is not None and (prev - current) >= 1:
             return hero
 
         prev = current

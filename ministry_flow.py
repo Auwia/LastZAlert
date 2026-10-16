@@ -1367,6 +1367,21 @@ class MinistryFlow:
                 queue
             )
 
+            # Zero is the minimum possible queue.
+            # Apply immediately without inspecting other ministries.
+            if queue == 0 and self.ministry_candidate_index < len(self.ministry_candidates):
+                self.ministry_winner = "construction"
+                self.current_ministry = "construction"
+
+                self.log(
+                    "[MINISTRY] CONSTRUCTION queue=0 "
+                    "-> skip remaining candidates -> APPLY directly"
+                )
+
+                self.state = MinistryState.APPLY_WINNER
+                self._mark_action()
+                return
+
             if self._finish_candidate_in_open_popup("construction"):
                 return
 

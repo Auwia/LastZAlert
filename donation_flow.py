@@ -121,13 +121,55 @@ class DonationState(Enum):
 # DONATION FLOW
 # ============================================================
 
+DONATION_SCHEDULE_FILE = "donation_schedule.txt"
+DONATION_RETRY_SECONDS = 10 * 60
+DONATION_ICON_TIMEOUT_SEC = 5
+
+
 class DonationFlow:
+    @property
+    def next_allowed(self):
+        return self._next_allowed
+
+    @next_allowed.setter
+    def next_allowed(self, value):
+        self._next_allowed = float(value)
+        try:
+            from pathlib import Path
+            Path(DONATION_SCHEDULE_FILE).write_text(
+                f"{self._next_allowed:.3f}\n",
+                encoding="utf-8"
+            )
+        except OSError as exc:
+            self.log(f"[DONATION-FLOW] schedule save failed: {exc}")
+
+    def _load_schedule(self):
+        try:
+            from pathlib import Path
+            value = float(
+                Path(DONATION_SCHEDULE_FILE)
+                .read_text(encoding="utf-8")
+                .strip()
+            )
+            self._next_allowed = max(0.0, value)
+        except (OSError, ValueError):
+            self._next_allowed = 0.0
+
+        if self._next_allowed > time.time():
+            self.log(
+                "[DONATION-FLOW] next scheduled attempt: "
+                + time.strftime(
+                    "%Y-%m-%d %H:%M:%S",
+                    time.localtime(self._next_allowed)
+                )
+            )
+
     def __init__(self, log_fn=print):
         self.log = log_fn
         self.state = DonationState.IDLE
         self.last_action_ts = 0.0
         self.attempts_left = 0
-        self.next_allowed = 0.0
+        self._load_schedule()
         self.started_ts = 0.0
         self.initial_attempts = 0
         self.last_progress_ts = 0.0
@@ -177,6 +219,7 @@ class DonationFlow:
         STALL_TIMEOUT_SEC = 20
         if self.state != DonationState.IDLE and (time.time() - self.last_progress_ts) > STALL_TIMEOUT_SEC:
             self.log("[DONATION-FLOW] STALL → reset + release")
+            self.next_allowed = time.time() + DONATION_RETRY_SECONDS
             self.state = DonationState.IDLE
             WORKFLOW_MANAGER.release(Workflow.DONATION)
             self._mark_action()
@@ -187,6 +230,19 @@ class DonationFlow:
         # ----------------------------------------------------
         if self.state == DonationState.FIND_ALLIANCE_ICON:
             name, score, loc, hw = match_any(img, self.templates["alliance_icon"])
+
+            if not name or score < THR:
+                if time.time() - self.started_ts >= DONATION_ICON_TIMEOUT_SEC:
+                    self.log(
+                        "[DONATION-FLOW] alliance icon not found "
+                        "-> release, retry in 10 min"
+                    )
+                    self.next_allowed = time.time() + DONATION_RETRY_SECONDS
+                    self.state = DonationState.IDLE
+                    WORKFLOW_MANAGER.release(Workflow.DONATION)
+                    self._mark_action()
+                return
+
             if name and score >= THR:
                 cx = loc[0] + hw[1] // 2
                 cy = loc[1] + hw[0] // 2

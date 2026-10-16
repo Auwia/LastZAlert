@@ -24,6 +24,9 @@ HEAL_BUTTON_XY = (900, 2120)
 DEFAULT_HEAL_BATCH = 50
 HEAL_BATCH_FILE = "heal_batch.txt"
 HEAL_AFTER_TAP_WAIT_SEC = 5.0
+HEAL_REPLENISH_THR = 0.75
+HEAL_REPLENISH_CHECK_SEC = 8.0
+HEAL_REPLENISH_VERIFY_SEC = 5.0
 
 def crop_roi_local(img, roi_frac):
     h, w = img.shape[:2]
@@ -66,6 +69,7 @@ class HealState(Enum):
     SET_BATCH = 3
     TAP_HEAL = 4
     WAIT_AFTER_HEAL = 5
+    VERIFY_REPLENISH = 6
 
 class HealFlow:
     def __init__(self, log_fn):
@@ -85,9 +89,11 @@ class HealFlow:
 
         self.templates = {
             "hospital": load_templates("hospital"),
+            "replenish": load_templates("research/replenish.png"),
         }
 
         self.wait_after_heal_ts = 0.0
+        self.replenish_tapped = False
 
         self.log("[HEAL-FLOW] inizializzato")
 
@@ -140,6 +146,7 @@ class HealFlow:
 
         self.state = HealState.IDLE
         self.heal_icon_xy = None
+        self.replenish_tapped = False
         WORKFLOW_MANAGER.release(Workflow.HEAL)
         self._mark_action()
 
@@ -242,18 +249,68 @@ class HealFlow:
         # 4) tap bottone Heal
         if self.state == HealState.TAP_HEAL:
             adb_tap(*HEAL_BUTTON_XY)
-            self.log("[HEAL-FLOW] tap HEAL")
+            self.log(f"[HEAL-FLOW] tap HEAL - soldiers={self.heal_batch}")
 
             self.wait_after_heal_ts = time.time()
+            self.replenish_tapped = False
             self.state = HealState.WAIT_AFTER_HEAL
             self.last_progress_ts = time.time()
             self._mark_action()
             return
 
-        # 5) aspetta che la UI si stabilizzi prima di rilasciare
+        # 5) Check optional resource replenishment.
         if self.state == HealState.WAIT_AFTER_HEAL:
-            if time.time() - self.wait_after_heal_ts < HEAL_AFTER_TAP_WAIT_SEC:
+            elapsed = time.time() - self.wait_after_heal_ts
+
+            if elapsed < HEAL_AFTER_TAP_WAIT_SEC:
                 return
 
-            self._release_and_reset("[HEAL-FLOW] completed + release")
+            name, score, loc, hw = match_any(
+                img, self.templates["replenish"]
+            )
+
+            if DEBUG:
+                self.log(f"[HEAL-FLOW] replenish score={score:.3f}")
+
+            if name and score >= HEAL_REPLENISH_THR:
+                xy = (loc[0] + hw[1] // 2, loc[1] + hw[0] // 2)
+                adb_tap(*xy)
+                self.log(
+                    f"[HEAL-FLOW] replenish all tapped "
+                    f"score={score:.3f} @ {xy}"
+                )
+                self.replenish_tapped = True
+                self.wait_after_heal_ts = time.time()
+                self.state = HealState.VERIFY_REPLENISH
+                self.last_progress_ts = time.time()
+                self._mark_action()
+                return
+
+            if elapsed < HEAL_REPLENISH_CHECK_SEC:
+                return
+
+            self._release_and_reset(
+                "[HEAL-FLOW] no replenish detected -> release"
+            )
+            return
+
+        # 6) Verify replenishment without blind confirmation taps.
+        if self.state == HealState.VERIFY_REPLENISH:
+            if time.time() - self.wait_after_heal_ts < HEAL_REPLENISH_VERIFY_SEC:
+                return
+
+            name, score, *_ = match_any(
+                img, self.templates["replenish"]
+            )
+
+            if name and score >= HEAL_REPLENISH_THR:
+                self._release_and_reset(
+                    "[HEAL-FLOW] replenish still visible -> manual check"
+                )
+                return
+
+            self._release_and_reset(
+                "[HEAL-FLOW] replenish dismissed -> release "
+                "(healing not yet verified)"
+            )
             return
