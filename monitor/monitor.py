@@ -1832,9 +1832,12 @@ def safe_send(handler, status_code, content_type, body, extra_headers=None):
         raise
 
 
+WEBP_PATH = IMAGE_PATH.with_suffix(".webp")
+
+
 def get_image_version():
     try:
-        st = IMAGE_PATH.stat()
+        st = WEBP_PATH.stat()
         return f"{st.st_mtime_ns}-{st.st_size}"
     except FileNotFoundError:
         return "missing"
@@ -2558,7 +2561,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def serve_image(self):
         try:
-            data = IMAGE_PATH.read_bytes()
+            data = WEBP_PATH.read_bytes()
         except FileNotFoundError:
             return safe_send(
                 self, 503, "text/plain; charset=utf-8",
@@ -2573,7 +2576,7 @@ class Handler(BaseHTTPRequestHandler):
         return safe_send(
             self,
             200,
-            "image/png",
+            "image/webp",
             data,
             {
                 "Cache-Control": "no-store, no-cache, must-revalidate",
@@ -2636,6 +2639,18 @@ def independent_screenshot_loop():
                 temp = IMAGE_PATH.with_name("screen_monitor.tmp")
                 temp.write_bytes(data)
                 temp.replace(IMAGE_PATH)
+
+                # Convert only the monitor copy, preserving original PNG.
+                from PIL import Image
+                webp_temp = WEBP_PATH.with_suffix(".webp.tmp")
+                with Image.open(IMAGE_PATH) as img:
+                    img.save(
+                        webp_temp,
+                        format="WEBP",
+                        quality=80,
+                        method=4,
+                    )
+                webp_temp.replace(WEBP_PATH)
             else:
                 print(
                     "[SCREENSHOT] Capture failed:",
