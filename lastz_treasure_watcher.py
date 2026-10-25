@@ -22,11 +22,20 @@ from hero_flow import HeroFlow
 from ministry_flow import MinistryFlow
 from rally_flow import RallyFlow, RALLY_TRIGGER_ROI
 from research_flow import ResearchFlow
+from complete_research_flow import CompleteResearchFlow
 from tank_flow import TankFlow
 from simple_events import SIMPLE_EVENTS
 from treasure_flow_simplified import TreasureFlowSimplified
+from treasure_flow import TreasureFlow
+
 from workflow_manager import WORKFLOW_MANAGER, Workflow
-from flow_control import is_flow_enabled
+from flow_control import (
+    is_flow_enabled,
+    get_treasure_flow_mode,
+)
+
+# Treasure workflow selection is loaded at startup.
+TREASURE_FLOW_MODE = get_treasure_flow_mode()
 
 # ============================================================
 # CONFIG
@@ -184,6 +193,22 @@ _perf_tick_stats = {}
 _simple_event_templates = {}
 _last_fire_simple_event = {}
 _last_generic_fire = 0.0
+
+# GENERIC state across successive screenshots.
+_generic_scan = {
+    "active": False,
+    "events": [],
+    "index": 0,
+    "executed": [],
+    "started": 0.0,
+    "wait_frame": None,
+    "wait_mtime": None,
+    "wait_started": 0.0,
+}
+
+GENERIC_SCAN_TIMEOUT_SEC = 90.0
+GENERIC_FRAME_TIMEOUT_SEC = 15.0
+
 
 _hq_upgrade_state = {"state": "IDLE"}
 _hq_templates = None
@@ -744,7 +769,9 @@ def treasure_detect_tick(stop_evt: threading.Event, img=None) -> None:
     flow = flows.get("treasure")
     if flow is not None:
         flow.trigger(coords, loc, hw)
-        log_event("[TREASURE] detected -> simplified flow")
+        log_event(
+            f"[TREASURE] detected -> {TREASURE_FLOW_MODE} flow"
+        )
     else:
         log_event("[TREASURE] detected but workflow busy -> waiting")
 
@@ -930,37 +957,156 @@ def rally_tick(img=None) -> None:
 # ============================================================
 
 def simple_event_watcher_tick(stop_evt: threading.Event, img=None) -> bool:
-    global _simple_event_templates, _last_fire_simple_event, _last_generic_fire, _last_multi_resource_time
+    global _simple_event_templates
+    global _last_fire_simple_event
+    global _last_generic_fire
+    global _last_multi_resource_time
 
-    if not is_flow_enabled("generic"):
-        return False
+    scan = _generic_scan
 
-    if not _simple_event_templates:
-        for ev_name, cfg in SIMPLE_EVENTS.items():
-            templates = load_templates_from_dir(cfg["templates"])
-            if templates:
-                _simple_event_templates[ev_name] = templates
+    def finish_scan(reason):
+        global _last_generic_fire
 
-        _last_fire_simple_event = {ev_name: 0.0 for ev_name in _simple_event_templates}
-        log_event(f"[SIMPLE EVENTS] templates loaded={len(_simple_event_templates)}")
+        executed = list(scan["executed"])
+        elapsed = time.monotonic() - scan["started"]
 
-    now = time.time()
-    if now - _last_generic_fire < 1:
-        return
+        log_event(
+            f"[SIMPLE EVENTS] END reason={reason} "
+            f"checked={scan['index']}/{len(scan['events'])} "
+            f"executed={len(executed)} "
+            f"events={executed} "
+            f"duration={elapsed:.1f}s"
+        )
 
-    if not WORKFLOW_MANAGER.acquire(Workflow.GENERIC):
-        return
+        scan["active"] = False
+        scan["events"] = []
+        scan["index"] = 0
+        scan["executed"] = []
+        scan["wait_frame"] = None
+        scan["wait_mtime"] = None
 
-    hit = None
+        _last_generic_fire = time.time()
+
+        WORKFLOW_MANAGER.release(Workflow.GENERIC)
+
+        log_event("[SIMPLE EVENTS] GENERIC released")
+
+        return bool(executed)
+
+    # --------------------------------------------------------
+    # START SCAN
+    # --------------------------------------------------------
+
+    if not scan["active"]:
+
+        if stop_evt.is_set() or not is_flow_enabled("generic"):
+            return False
+
+        if time.time() - _last_generic_fire < 1:
+            return False
+
+        if not _simple_event_templates:
+            for ev_name, cfg in SIMPLE_EVENTS.items():
+                templates = load_templates_from_dir(cfg["templates"])
+
+                if templates:
+                    _simple_event_templates[ev_name] = templates
+
+            _last_fire_simple_event = {
+                name: 0.0
+                for name in _simple_event_templates
+            }
+
+            log_event(
+                f"[SIMPLE EVENTS] templates loaded="
+                f"{len(_simple_event_templates)}"
+            )
+
+        if not WORKFLOW_MANAGER.acquire(Workflow.GENERIC):
+            return False
+
+        scan["active"] = True
+        scan["events"] = list(_simple_event_templates.items())
+        scan["index"] = 0
+        scan["executed"] = []
+        scan["started"] = time.monotonic()
+        scan["wait_frame"] = None
+        scan["wait_mtime"] = None
+
+        log_event(
+            f"[SIMPLE EVENTS] START total={len(scan['events'])}"
+        )
+
+    # --------------------------------------------------------
+    # CONTINUE SCAN
+    # --------------------------------------------------------
+
     try:
+        if stop_evt.is_set() or not is_flow_enabled("generic"):
+            return finish_scan("stopped")
+
+        if (
+            time.monotonic() - scan["started"]
+            >= GENERIC_SCAN_TIMEOUT_SEC
+        ):
+            return finish_scan("timeout")
+
+        # Wait for a newer screenshot after the previous TAP.
+        if scan["wait_frame"] is not None:
+
+            if ENABLE_SCREENSHOT_DRIVEN_ENGINE:
+                fresh = _frame_counter > scan["wait_frame"]
+
+            else:
+                try:
+                    fresh = (
+                        os.stat(SCREENSHOT_PATH).st_mtime_ns
+                        > scan["wait_mtime"]
+                    )
+                except OSError:
+                    fresh = False
+
+            if not fresh:
+                if (
+                    time.monotonic() - scan["wait_started"]
+                    >= GENERIC_FRAME_TIMEOUT_SEC
+                ):
+                    return finish_scan("frame_timeout")
+
+                return False
+
+            scan["wait_frame"] = None
+            scan["wait_mtime"] = None
+
+        # Use the image already provided by the engine.
         if img is None:
             with SCREENSHOT_LOCK:
                 img = load_image(SCREENSHOT_PATH)
-        
-        if img is None:
-            return
 
-        for ev_name, templates in _simple_event_templates.items():
+        if img is None:
+            return False
+
+        # ----------------------------------------------------
+        # CHECK ALL REMAINING EVENTS
+        # ----------------------------------------------------
+
+        while scan["index"] < len(scan["events"]):
+
+            if stop_evt.is_set() or not is_flow_enabled("generic"):
+                return finish_scan("stopped")
+
+            if (
+                time.monotonic() - scan["started"]
+                >= GENERIC_SCAN_TIMEOUT_SEC
+            ):
+                return finish_scan("timeout")
+
+            ev_name, templates = scan["events"][scan["index"]]
+
+            # Advance before processing.
+            # A TAP resumes at the following event.
+            scan["index"] += 1
+
             cfg = SIMPLE_EVENTS[ev_name]
             now = time.time()
             if now - _last_fire_simple_event[ev_name] < cfg["cooldown"]:
@@ -1035,17 +1181,35 @@ def simple_event_watcher_tick(stop_evt: threading.Event, img=None) -> bool:
             
                 log_event(f"[SIMPLE EVENTS] CALIBRA dopo confirm_popup @ {x},{y}")
 
-            _last_fire_simple_event[ev_name] = now
-            _last_generic_fire = now
-            hit = ev_name
-            time.sleep(0.2)
-            break
-    finally:
-        WORKFLOW_MANAGER.release(Workflow.GENERIC)
-        if hit is not None:
-            time.sleep(0.3)
+            _last_fire_simple_event[ev_name] = time.time()
+            scan["executed"].append(ev_name)
 
-    return hit is not None
+            # Wait for the next screenshot from the existing engine.
+            scan["wait_frame"] = _frame_counter
+
+            try:
+                scan["wait_mtime"] = (
+                    os.stat(SCREENSHOT_PATH).st_mtime_ns
+                )
+            except OSError:
+                scan["wait_mtime"] = 0
+
+            scan["wait_started"] = time.monotonic()
+
+            log_event(
+                f"[SIMPLE EVENTS] WAIT NEXT FRAME "
+                f"after={ev_name} "
+                f"remaining={len(scan['events']) - scan['index']}"
+            )
+
+            return True
+
+        return finish_scan("completed")
+
+    except Exception:
+        if scan["active"]:
+            finish_scan("error")
+        raise
 
 
 def _ensure_hq_lock() -> bool:
@@ -1238,6 +1402,7 @@ def any_workflow_active() -> bool:
         for flow in (
             Workflow.GENERIC,
             Workflow.DONATION,
+            Workflow.COMPLETE_RESEARCH,
             Workflow.RESEARCH,
             Workflow.RALLY,
             Workflow.MINISTRY,
@@ -1346,8 +1511,16 @@ def init_flows():
         on_complete=_mark_tank_completed_today,
     )
     flows["rally"] = RallyFlow(log_event)
-    flows["treasure"] = TreasureFlowSimplified(log_event)
+    if TREASURE_FLOW_MODE == "original":
+        flows["treasure"] = TreasureFlow(log_event)
+    else:
+        flows["treasure"] = TreasureFlowSimplified(log_event)
+
+    log_event(
+        f"[TREASURE] workflow mode={TREASURE_FLOW_MODE}"
+    )
     flows["research"] = init_research_flow()
+    flows["complete_research"] = CompleteResearchFlow(log_event)
     return HealFlow(log_event)
 
 def maybe_trigger_bounty(img=None) -> None:
@@ -1476,6 +1649,26 @@ def maybe_trigger_hero() -> None:
             f"{now.strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
+def maybe_trigger_complete_research(img=None) -> None:
+    flow = flows.get("complete_research")
+
+    if flow is None or flow.state.name != "IDLE":
+        return
+
+    if not can_start_common(Workflow.COMPLETE_RESEARCH):
+        return
+
+    if img is None:
+        with SCREENSHOT_LOCK:
+            img = load_image(SCREENSHOT_PATH)
+
+    if img is None:
+        return
+
+    if flow.detect_trigger(img):
+        flow.trigger()
+
+
 def maybe_trigger_research(img=None) -> None:
     global _last_research_main_trigger
     if not is_flow_enabled("research"):
@@ -1574,7 +1767,15 @@ def screenshot_driven_run_active_workflow(
             f"active workflow={active.name}"
         )
 
-    if active == Workflow.TANK:
+    if active == Workflow.GENERIC:
+        timed_tick(
+            "SIMPLE-EVENTS",
+            simple_event_watcher_tick,
+            stop_evt,
+            img
+        )
+
+    elif active == Workflow.TANK:
         timed_tick("TANK", tank_tick, img)
 
     elif active == Workflow.TREASURE:
@@ -1600,6 +1801,9 @@ def screenshot_driven_run_active_workflow(
 
     elif active == Workflow.FORZIERE:
         timed_tick("FORZIERE", forziere_tick, img)
+
+    elif active == Workflow.COMPLETE_RESEARCH:
+        timed_tick("COMPLETE-RESEARCH", flows["complete_research"].step, img)
 
     elif active == Workflow.RESEARCH:
         timed_tick("RESEARCH", research_tick, img)
@@ -1660,15 +1864,32 @@ def run_screenshot_driven_engine(
     heal_flow: HealFlow
 ) -> None:
 
-    log_event("[ENGINE] SCREENSHOT-DRIVEN enabled")
+    log_event("[ENGINE] SCREENSHOT-DRIVEN sequential priority scheduler")
+
+    # Independent workflows, ordered by configured priority.
+    workflow_order = [
+        Workflow.COMPLETE_RESEARCH,
+        Workflow.TANK,
+        Workflow.TREASURE,
+        Workflow.HQ,
+        Workflow.HEAL,
+        Workflow.DONATION,
+        Workflow.MINISTRY,
+        Workflow.FORZIERE,
+        Workflow.GENERIC,
+        Workflow.RESEARCH,
+        Workflow.RALLY,
+        Workflow.HERO,
+        Workflow.BOUNTY,
+    ]
+
+    # The cursor survives workflow acquisition and release.
+    cursor = 0
+    previous_active = None
+    generic_after_release = False
 
     while not stop_evt.is_set():
 
-        # ====================================================
-        # 1. NUOVO FRAME
-        # ====================================================
-
-        # No workflow activity while Last Z is not foreground.
         if not lastz_game_foreground():
             time.sleep(1.0)
             continue
@@ -1679,161 +1900,140 @@ def run_screenshot_driven_engine(
             time.sleep(0.5)
             continue
 
-        # ====================================================
-        # 2. SE ESISTE UN WF ATTIVO,
-        #    SOLO QUEL WF PUÒ USARE QUESTO FRAME
-        # ====================================================
+        active = WORKFLOW_MANAGER.current()
 
-        if screenshot_driven_run_active_workflow(
-            stop_evt,
-            heal_flow,
-            img
-        ):
+        # An active workflow owns the frame exclusively.
+        if active is not None:
+            previous_active = active
+            screenshot_driven_run_active_workflow(
+                stop_evt, heal_flow, img
+            )
             time.sleep(SCREENSHOT_DRIVEN_DELAY_SEC)
             continue
 
-        # ====================================================
-        # 3. NESSUN WF ATTIVO:
-        #    SCANSIONE SEQUENZIALE
-        # ====================================================
+        # Continue AFTER the workflow that just released the lock.
+        if previous_active is not None:
+            if previous_active in workflow_order:
+                if previous_active == Workflow.GENERIC:
+                    if workflow_order[cursor] == Workflow.GENERIC:
+                        cursor = (cursor + 1) % len(workflow_order)
+                else:
+                    cursor = (
+                        workflow_order.index(previous_active) + 1
+                    ) % len(workflow_order)
+                # GENERIC is an auxiliary pass: preserve the cursor.
 
-        maybe_trigger_tank(img)
+            log_event(
+                f"[SCHEDULER] released={previous_active.name}"
+            )
+            # Run GENERIC once after a completed or timed-out workflow.
+            # Never schedule an extra GENERIC after GENERIC itself.
+            if previous_active != Workflow.GENERIC:
+                generic_after_release = True
 
-        if any_workflow_active():
+            previous_active = None
+
+        # Extra GENERIC pass does not advance the priority cursor.
+        if generic_after_release:
+            generic_after_release = False
+
+            if can_start_common(Workflow.GENERIC):
+                timed_tick(
+                    "SIMPLE-EVENTS",
+                    simple_event_watcher_tick,
+                    stop_evt,
+                    img
+                )
+
             time.sleep(SCREENSHOT_DRIVEN_DELAY_SEC)
             continue
 
-        timed_tick(
-            "TREASURE-DETECT",
-            treasure_detect_tick,
-            stop_evt,
-            img
-        )
+        # HEAL detection runs on every idle frame.
+        # If it acquires the workflow lock, execute HEAL next.
+        if is_flow_enabled("heal"):
+            timed_tick("HEAL", heal_tick, heal_flow, img)
 
-        if any_workflow_active():
-            time.sleep(SCREENSHOT_DRIVEN_DELAY_SEC)
-            continue
+            if WORKFLOW_MANAGER.current() == Workflow.HEAL:
+                previous_active = Workflow.HEAL
+                log_event("[SCHEDULER] started=HEAL")
+                time.sleep(SCREENSHOT_DRIVEN_DELAY_SEC)
+                continue
 
+        workflow = workflow_order[cursor]
 
-        timed_tick(
-            "HEAL",
-            heal_tick,
-            heal_flow,
-            img
-        )
+        if workflow == Workflow.COMPLETE_RESEARCH:
+            maybe_trigger_complete_research(img)
 
-        if any_workflow_active():
-            time.sleep(SCREENSHOT_DRIVEN_DELAY_SEC)
-            continue
+        elif workflow == Workflow.TANK:
+            maybe_trigger_tank(img)
 
-
-        timed_tick(
-            "HQ-UPGRADE",
-            hq_upgrade_watcher_tick,
-            stop_evt,
-            img
-        )
-
-        if any_workflow_active():
-            time.sleep(SCREENSHOT_DRIVEN_DELAY_SEC)
-            continue
-
-
-        if can_start_common(Workflow.GENERIC):
-            simple_event_action = timed_tick(
-                "SIMPLE-EVENTS",
-                simple_event_watcher_tick,
+        elif workflow == Workflow.TREASURE:
+            timed_tick(
+                "TREASURE-DETECT",
+                treasure_detect_tick,
                 stop_evt,
                 img
             )
 
-            if simple_event_action:
-                time.sleep(SCREENSHOT_DRIVEN_DELAY_SEC)
-                continue
+        elif workflow == Workflow.HQ:
+            timed_tick(
+                "HQ-UPGRADE",
+                hq_upgrade_watcher_tick,
+                stop_evt,
+                img
+            )
 
-        #
-        # ATTENZIONE:
-        # Generic può acquisire e rilasciare il lock
-        # tutto dentro lo stesso tick.
-        #
-        # In questa prima versione lasciamo quindi
-        # Simple Events invariato.
-        # Lo renderemo "action-aware" nella fase 2.
-        #
+        elif workflow == Workflow.HEAL:
+            timed_tick(
+                "HEAL",
+                heal_tick,
+                heal_flow,
+                img
+            )
 
+        elif workflow == Workflow.DONATION:
+            maybe_trigger_donation()
 
-        maybe_trigger_hero()
+        elif workflow == Workflow.MINISTRY:
+            maybe_trigger_ministry(img)
 
-        if any_workflow_active():
-            continue
+        elif workflow == Workflow.FORZIERE:
+            maybe_trigger_forziere(img)
 
-        timed_tick("HERO", hero_tick, img)
+        elif workflow == Workflow.GENERIC:
+            if can_start_common(Workflow.GENERIC):
+                timed_tick(
+                    "SIMPLE-EVENTS",
+                    simple_event_watcher_tick,
+                    stop_evt,
+                    img
+                )
 
-        if any_workflow_active():
-            continue
+        elif workflow == Workflow.RESEARCH:
+            maybe_trigger_research(img)
 
+        elif workflow == Workflow.RALLY:
+            maybe_trigger_rally(img)
 
-        maybe_trigger_bounty(img)
+        elif workflow == Workflow.HERO:
+            maybe_trigger_hero()
 
-        if any_workflow_active():
-            continue
+        elif workflow == Workflow.BOUNTY:
+            maybe_trigger_bounty(img)
 
-        timed_tick("BOUNTY", bounty_tick, img)
+        # If a workflow acquired the lock, keep its position.
+        # The next iteration will execute that workflow.
+        active = WORKFLOW_MANAGER.current()
 
-        if any_workflow_active():
-            continue
-
-
-        maybe_trigger_donation()
-
-        if any_workflow_active():
-            continue
-
-        timed_tick("DONATION", donation_tick, img)
-
-        if any_workflow_active():
-            continue
-
-
-        maybe_trigger_ministry(img)
-
-        if any_workflow_active():
-            continue
-
-        timed_tick("MINISTRY", ministry_tick, img)
-
-        if any_workflow_active():
-            continue
-
-
-        maybe_trigger_forziere(img)
-
-        if any_workflow_active():
-            continue
-
-        timed_tick("FORZIERE", forziere_tick, img)
-
-        if any_workflow_active():
-            continue
-
-        maybe_trigger_research(img)
-
-        if any_workflow_active():
-            continue
-
-        timed_tick("RESEARCH", research_tick, img)
-
-        if any_workflow_active():
-            continue
-
-
-        maybe_trigger_rally(img)
-
-        if any_workflow_active():
-            continue
-
+        if active is not None:
+            previous_active = active
+            log_event(f"[SCHEDULER] started={active.name}")
+        else:
+            # No trigger: move to the next independent workflow.
+            cursor = (cursor + 1) % len(workflow_order)
 
         time.sleep(SCREENSHOT_DRIVEN_DELAY_SEC)
+
 
 def main() -> None:
     print("=== Last Z Bot (sequential clean) ===")
@@ -1922,12 +2122,19 @@ def main() -> None:
                     stop_evt
                 )
     
-                if can_start_common(Workflow.GENERIC):
+                if (
+                    WORKFLOW_MANAGER.is_active(Workflow.GENERIC)
+                    or can_start_common(Workflow.GENERIC)
+                ):
                     timed_tick(
                         "SIMPLE-EVENTS",
                         simple_event_watcher_tick,
                         stop_evt
                     )
+
+                if WORKFLOW_MANAGER.is_active(Workflow.GENERIC):
+                    time.sleep(MAIN_LOOP_ACTIVE_SLEEP_SEC)
+                    continue
     
                 maybe_trigger_hero()
                 timed_tick("HERO", hero_tick)
@@ -1944,6 +2151,7 @@ def main() -> None:
                 maybe_trigger_forziere()
                 timed_tick("FORZIERE", forziere_tick)
     
+                maybe_trigger_complete_research(img)
                 maybe_trigger_research(img)
                 timed_tick("RESEARCH", research_tick)
     

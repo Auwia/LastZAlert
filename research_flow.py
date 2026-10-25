@@ -10,7 +10,8 @@ from datetime import datetime
 from enum import Enum
 
 from workflow_manager import Workflow, WORKFLOW_MANAGER
-from bot_utils import load_templates, match_any, adb_tap
+from flow_control import get_research_flow_mode
+from bot_utils import load_templates, match_any, adb_tap, adb_swipe
 
 # ============================================================
 # CONFIG
@@ -33,6 +34,10 @@ LAB_RETRY_WAIT = 1.0
 THR_RECOMMENDED = 0.56
 ACTION_COOLDOWN = 1.0
 STALL_TIMEOUT = 40
+
+RESEARCH_SCROLL_MAX = 5
+RESEARCH_SCROLL_WAIT = 1.5
+RESEARCH_SWIPE = (700, 1508, 610, 80, 713)
 
 # ordine = priorità
 RESEARCH_PRIORITIES = [
@@ -356,6 +361,8 @@ class ResearchFlow:
 
         self.lab_opened = False
         self.is_wednesday_mode = False
+        self.research_mode = get_research_flow_mode()
+        self.log(f"[RESEARCH] workflow mode={self.research_mode}")
 
         self.templates = {
             "start": load_templates("research/start.png"),
@@ -378,6 +385,8 @@ class ResearchFlow:
 
         self.scan_retry = 0
         self.lab_retry = 0
+        self.category_scrolls = 0
+        self.node_scrolls = 0
 
         self.log("[RESEARCH-FLOW] initialized")
 
@@ -441,6 +450,66 @@ class ResearchFlow:
             return True
         return False
 
+    def _research_scroll(self, screen):
+        """Scroll down without resetting the progress watchdog."""
+        counter = (
+            "category_scrolls"
+            if screen == "category"
+            else "node_scrolls"
+        )
+
+        count = getattr(self, counter)
+
+        if count >= RESEARCH_SCROLL_MAX:
+            self.log(
+                f"[RESEARCH] {screen}: "
+                f"scroll limit reached ({count})"
+            )
+            return False
+
+        self.log(
+            f"[RESEARCH] {screen}: "
+            f"scroll down {count + 1}/{RESEARCH_SCROLL_MAX}"
+        )
+
+        adb_swipe(*RESEARCH_SWIPE)
+        setattr(self, counter, count + 1)
+
+        time.sleep(RESEARCH_SCROLL_WAIT)
+        return True
+
+    def _tap_recommended_category(self, img):
+        """Find the recommended thumb inside the category grid."""
+        name, score, loc, hw = match_any(
+            img, self.templates["recommended"]
+        )
+
+        if not name or score < 0.75:
+            self.log(
+                f"[RESEARCH] category thumb rejected "
+                f"score={score:.3f} -> scroll"
+            )
+            return False
+
+        x = loc[0] + hw[1] // 2
+        y = loc[1] + hw[0] // 2
+
+        # Ignore matches outside the category grid.
+        if not (100 <= x <= 800 and 420 <= y <= 1900):
+            self.log(
+                f"[RESEARCH] category thumb outside grid "
+                f"score={score:.3f} @ ({x},{y}) -> scroll"
+            )
+            return False
+
+        self.log(
+            f"[RESEARCH] recommended category "
+            f"score={score:.3f} tap=({x},{y})"
+        )
+
+        adb_tap(x, y)
+        return True
+
     def _tap_recommended(self, img, log_msg):
         name, score, loc, hw = match_any(img, self.templates["recommended"])
 
@@ -489,7 +558,7 @@ class ResearchFlow:
         if not WORKFLOW_MANAGER.acquire(Workflow.RESEARCH):
             return
 
-        self.is_wednesday_mode = self._is_wednesday_window()
+        self.is_wednesday_mode = True
         self.state = ResearchState.FIND_START
         self.last_progress_ts = time.time()
         self._mark()
@@ -507,9 +576,16 @@ class ResearchFlow:
             return
 
         if (time.time() - self.last_progress_ts) > STALL_TIMEOUT:
-            self.state = ResearchState.IDLE
-            self.is_wednesday_mode = False
-            WORKFLOW_MANAGER.release(Workflow.RESEARCH)
+            elapsed = time.time() - self.last_progress_ts
+
+            self.log(
+                f"[RESEARCH] STALL TIMEOUT "
+                f"state={self.state.name} "
+                f"elapsed={elapsed:.1f}s "
+                f"limit={STALL_TIMEOUT}s -> release"
+            )
+
+            self._do_exit()
             return
 
         # -----------------------------------------------------
@@ -583,6 +659,8 @@ class ResearchFlow:
         
                 self.research_index = 0
                 self.scan_retry = 0
+                self.category_scrolls = 0
+                self.node_scrolls = 0
         
                 time.sleep(2)
         
@@ -632,6 +710,8 @@ class ResearchFlow:
                 self.lab_retry = 0
                 self.research_index = 0
                 self.scan_retry = 0
+                self.category_scrolls = 0
+                self.node_scrolls = 0
         
                 time.sleep(2)
         
@@ -669,49 +749,70 @@ class ResearchFlow:
 
         if self.state == ResearchState.TAP_CATEGORY:
 
-            if self.research_index >= len(self.research_priorities):
-                self.log("[RESEARCH] no research available in priorities")
-                self.state = ResearchState.EXIT
-                self._mark()
-                return
-        
-            research_name, templates = \
-                self.research_priorities[self.research_index]
-        
-            name, score, loc, hw = match_any(img, templates)
+            # Recommended: find the thumb on the category screen.
+            if self.research_mode == "recommended":
 
-            if DEBUG:
-                self.log(
-                    f"[RESEARCH] category check "
-                    f"{research_name} score={score:.3f}"
-                )
+                if self._tap_recommended_category(img):
+                    self.current_research = "recommended"
+                    self.scan_retry = 0
+                    self.node_scrolls = 0
 
-            if name and score >= THR:
-        
-                adb_tap(
-                    loc[0] + hw[1] // 2,
-                    loc[1] + hw[0] // 2
-                )
-        
-                self.current_research = research_name
-                self.scan_retry = 0
-        
+                    self.log(
+                        "[RESEARCH] recommended category tapped"
+                    )
+
+                    time.sleep(4)
+                    self.state = ResearchState.SCAN_NODE
+                    self._mark()
+                    return
+
+                if self._research_scroll("category"):
+                    return
+
                 self.log(
-                    f"[RESEARCH] category opened: {research_name}"
+                    "[RESEARCH] recommended category not found -> exit"
                 )
-        
-                time.sleep(4)
-        
-                self.state = ResearchState.SCAN_NODE
-                self._mark()
+                self._do_exit()
                 return
-        
+
+            # Image scan: preserve template-based priorities.
+            # Check every priority on the current visible screen.
+            for research_name, templates in self.research_priorities:
+
+                name, score, loc, hw = match_any(img, templates)
+
+                if DEBUG:
+                    self.log(
+                        f"[RESEARCH] category check "
+                        f"{research_name} score={score:.3f}"
+                    )
+
+                if name and score >= THR:
+                    adb_tap(
+                        loc[0] + hw[1] // 2,
+                        loc[1] + hw[0] // 2
+                    )
+
+                    self.current_research = research_name
+                    self.scan_retry = 0
+                    self.node_scrolls = 0
+
+                    self.log(
+                        f"[RESEARCH] category opened: {research_name}"
+                    )
+
+                    time.sleep(4)
+                    self.state = ResearchState.SCAN_NODE
+                    self._mark()
+                    return
+
+            if self._research_scroll("category"):
+                return
+
             self.log(
-                f"[RESEARCH] category {research_name} not found"
+                "[RESEARCH] no category found after scrolling -> exit"
             )
-        
-            self.research_index += 1
-            self._mark()
+            self._do_exit()
             return
 
         # -----------------------------------------------------
@@ -720,7 +821,7 @@ class ResearchFlow:
 
         if self.state == ResearchState.SCAN_NODE:
         
-            if self.is_wednesday_mode:
+            if self.research_mode == "recommended":
                 if self._tap_recommended(
                     img,
                     "[RESEARCH] recommended node tapped"
@@ -728,10 +829,11 @@ class ResearchFlow:
                     self.state = ResearchState.START_RESEARCH
                     self._mark()
                 else:
-                    self.log(
-                        "[RESEARCH] recommended node not found -> retry"
-                    )
-                    self._mark()
+                    if not self._research_scroll("node"):
+                        self.log(
+                            "[RESEARCH] recommended node not found -> exit"
+                        )
+                        self._do_exit()
                 return
         
             node = find_next_research_node(
@@ -762,7 +864,11 @@ class ResearchFlow:
                 self._mark()
                 return
         
-            # nessun nodo trovato: retry
+            # No node found: scan the next visible section.
+            if self._research_scroll("node"):
+                return
+
+            # Scrolling exhausted: use the existing retry/fallback.
             self.scan_retry += 1
         
             if self.scan_retry < SCAN_RETRY_MAX:
@@ -791,6 +897,8 @@ class ResearchFlow:
             self.current_research = None
             self.scan_retry = 0
         
+            self.category_scrolls = 0
+            self.node_scrolls = 0
             self.state = ResearchState.TAP_CATEGORY
             self._mark()
             return
@@ -821,7 +929,7 @@ class ResearchFlow:
                 self._mark()
                 return
 
-            self._mark()
+            # No progress: keep the stall timer running.
             return
 
         # -----------------------------------------------------

@@ -27,6 +27,13 @@ from flow_control import (
     is_ministry_enabled,
     set_flow_enabled,
     set_ministry_enabled,
+    get_all_rally_monster_states,
+    set_rally_monster_enabled,
+    RALLY_MONSTERS_DIR,
+    get_treasure_flow_mode,
+    set_treasure_flow_mode,
+    get_research_flow_mode,
+    set_research_flow_mode,
 )
 
 # =========================
@@ -362,6 +369,49 @@ HTML = """<!doctype html>
       background: #66ee9c;
     }
 
+    .rally-monster-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin: 8px 0 12px 12px;
+      padding-left: 10px;
+      border-left: 2px solid #374151;
+    }
+
+    .rally-monster-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 8px;
+      background: #17212b;
+      border: 2px solid #374151;
+      border-radius: 9px;
+      cursor: pointer;
+      min-width: 0;
+    }
+
+    .rally-monster-card img {
+      width: 100%;
+      height: 85px;
+      object-fit: contain;
+    }
+
+    .rally-monster-card input {
+      width: 20px;
+      height: 20px;
+      accent-color: #38d67a;
+    }
+
+    .rally-monster-card.enabled {
+      border-color: #38d67a;
+    }
+
+    .rally-monster-card.disabled {
+      opacity: 0.4;
+    }
+
     .ministry-group {
       margin: 2px 0 3px 14px;
       padding: 5px 0 2px 9px;
@@ -674,6 +724,20 @@ HTML = """<!doctype html>
                    onchange="setFlowEnabled('treasure', this.checked)">
           </label>
 
+          <div class="flow-switch">
+            <label for="treasureModeSelect">🚁 Treasure mode</label>
+            <select
+              id="treasureModeSelect"
+              onchange="setTreasureMode(this.value)"
+              style="max-width:150px;padding:7px;
+                     background:#1d252e;color:white;
+                     border:1px solid #555;border-radius:6px"
+            >
+              <option value="simplified">Simplified</option>
+              <option value="original">Original</option>
+            </select>
+          </div>
+
           <label class="flow-switch">
             <span>HQ</span>
             <input id="hqSwitch" type="checkbox"
@@ -743,12 +807,27 @@ HTML = """<!doctype html>
             <input id="researchSwitch" type="checkbox"
                    onchange="setFlowEnabled('research', this.checked)">
           </label>
+          <div class="flow-switch">
+            <label for="researchModeSelect">🔬 Research mode</label>
+            <select
+              id="researchModeSelect"
+              onchange="setResearchMode(this.value)"
+              style="max-width:150px;padding:7px;
+                     background:#1d252e;color:white;
+                     border:1px solid #555;border-radius:6px"
+            >
+              <option value="recommended">👍 Recommended</option>
+              <option value="image_scan">🔍 Image Scan</option>
+            </select>
+          </div>
 
           <label class="flow-switch">
             <span>RALLY</span>
             <input id="rallySwitch" type="checkbox"
                    onchange="setFlowEnabled('rally', this.checked)">
           </label>
+
+          <div id="rallyMonsterGrid" class="rally-monster-grid"></div>
 
           <label class="flow-switch">
             <span>HERO</span>
@@ -836,6 +915,83 @@ HTML = """<!doctype html>
       science: document.getElementById("ministryScienceSwitch"),
       agriculture: document.getElementById("ministryAgricultureSwitch")
     };
+
+    const rallyMonsterGrid =
+      document.getElementById("rallyMonsterGrid");
+
+    function updateRallyMonsterVisibility() {
+      rallyMonsterGrid.style.display =
+        flowSwitches.rally.checked ? "grid" : "none";
+    }
+
+    function renderRallyMonsters(monsters) {
+      rallyMonsterGrid.replaceChildren();
+
+      for (const [name, enabled] of Object.entries(monsters || {})) {
+        const card = document.createElement("label");
+        card.className =
+          "rally-monster-card " + (enabled ? "enabled" : "disabled");
+        card.title = name;
+
+        const picture = document.createElement("img");
+        picture.src =
+          "/rally-monster-image?name=" + encodeURIComponent(name);
+        picture.alt = name;
+        picture.loading = "lazy";
+
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = enabled;
+        checkbox.setAttribute("aria-label", name);
+
+        checkbox.addEventListener("change", async () => {
+          const requested = checkbox.checked;
+          checkbox.disabled = true;
+
+          try {
+            const response = await fetch(
+              "/action/set-rally-monster-enabled",
+              {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({
+                  monster: name,
+                  enabled: requested
+                })
+              }
+            );
+
+            const result = await response.json();
+
+            if (!response.ok || !result.ok) {
+              throw new Error(result.error || "Save failed");
+            }
+
+            checkbox.checked = result.enabled;
+            card.className =
+              "rally-monster-card " +
+              (result.enabled ? "enabled" : "disabled");
+
+            setStatus(
+              "RALLY " + name + " " +
+              (result.enabled ? "ON" : "OFF"),
+              "ok"
+            );
+
+          } catch (error) {
+            checkbox.checked = !requested;
+            setStatus("RALLY: " + error.message, "err");
+          } finally {
+            checkbox.disabled = false;
+          }
+        });
+
+        card.append(picture, checkbox);
+        rallyMonsterGrid.appendChild(card);
+      }
+
+      updateRallyMonsterVisibility();
+    }
 
     function updateAllWorkflowsButton() {
       const switches = [
@@ -1509,6 +1665,20 @@ HTML = """<!doctype html>
         const data = await r.json();
         modeLabel.textContent = data.control_mode || "-";
 
+        const treasureSelect =
+          document.getElementById("treasureModeSelect");
+
+        if (treasureSelect && data.treasure_flow_mode) {
+          treasureSelect.value = data.treasure_flow_mode;
+        }
+
+        const researchSelect =
+          document.getElementById("researchModeSelect");
+
+        if (researchSelect && data.research_flow_mode) {
+          researchSelect.value = data.research_flow_mode;
+        }
+
         if (data.heal_batch !== undefined && data.heal_batch !== null) {
           healBatchInput.value = data.heal_batch;
         }
@@ -1525,6 +1695,7 @@ HTML = """<!doctype html>
           });
         }
 
+        renderRallyMonsters(data.rally_monsters);
         updateAllWorkflowsButton();
         
       } catch (e) {
@@ -1716,6 +1887,96 @@ HTML = """<!doctype html>
       }
     }
 
+
+
+    async function setResearchMode(mode) {
+      const select =
+        document.getElementById("researchModeSelect");
+
+      select.disabled = true;
+
+      try {
+        const response = await fetch(
+          "/action/set-research-mode",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({mode: mode})
+          }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || "Unknown error");
+        }
+
+        select.value = data.mode;
+
+        setStatus(
+          "Research mode: " + data.mode.toUpperCase() +
+          " (restart LastZAlert to apply)",
+          "ok"
+        );
+
+      } catch (error) {
+        setStatus(
+          "Research mode error: " + error.message,
+          "err"
+        );
+        await fetchConfig();
+      } finally {
+        select.disabled = false;
+      }
+    }
+
+    async function setTreasureMode(mode) {
+      const select =
+        document.getElementById("treasureModeSelect");
+
+      select.disabled = true;
+
+      try {
+        const response = await fetch(
+          "/action/set-treasure-mode",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({mode: mode})
+          }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || "Unknown error");
+        }
+
+        select.value = data.mode;
+
+        setStatus(
+          "Treasure mode: " + data.mode.toUpperCase() +
+          " (restart LastZAlert to apply)",
+          "ok"
+        );
+
+      } catch (error) {
+        setStatus(
+          "Treasure mode error: " + error.message,
+          "err"
+        );
+
+        await fetchConfig();
+
+      } finally {
+        select.disabled = false;
+      }
+    }
+
     async function setFlowEnabled(flow, enabled) {
       const sw = flowSwitches[flow];
 
@@ -1768,6 +2029,10 @@ HTML = """<!doctype html>
       } finally {
         sw.disabled = false;
         updateAllWorkflowsButton();
+
+        if (flow === "rally") {
+          updateRallyMonsterVisibility();
+        }
       }
     }
 
@@ -2282,6 +2547,23 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/image"):
             return self.serve_image()
 
+        if self.path.startswith("/rally-monster-image?"):
+            from urllib.parse import urlsplit, parse_qs
+
+            name = parse_qs(
+                urlsplit(self.path).query
+            ).get("name", [""])[0]
+
+            if name not in get_all_rally_monster_states():
+                return text_response(self, 404, "Monster not found")
+
+            return safe_send(
+                self,
+                200,
+                "image/png",
+                (RALLY_MONSTERS_DIR / name).read_bytes()
+            )
+
         if self.path.startswith("/events"):
             return self.serve_events()
 
@@ -2294,6 +2576,9 @@ class Handler(BaseHTTPRequestHandler):
                 "heal_batch": read_heal_batch(),
                 "flows": get_all_flow_states(),
                 "ministries": get_all_ministry_states(),
+                "rally_monsters": get_all_rally_monster_states(),
+                "treasure_flow_mode": get_treasure_flow_mode(),
+                "research_flow_mode": get_research_flow_mode(),
             })
 
         return text_response(self, 404, "404 Not Found\n")
@@ -2317,22 +2602,123 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/action/set-heal-batch":
             return self.handle_set_heal_batch()
 
+        if self.path == "/action/set-research-mode":
+            return self.handle_set_research_mode()
+
+        if self.path == "/action/set-treasure-mode":
+            return self.handle_set_treasure_mode()
+
         if self.path == "/action/set-flow-enabled":
             return self.handle_set_flow_enabled()
 
         if self.path == "/action/set-ministry-enabled":
             return self.handle_set_ministry_enabled()
 
+        if self.path == "/action/set-rally-monster-enabled":
+            return self.handle_set_rally_monster_enabled()
+
         if self.path == "/action/home":
             return self.handle_locked_action(android_home)
 
         return json_response(self, 404, {"ok": False, "error": "not found"})
+
+    def handle_set_rally_monster_enabled(self):
+        try:
+            payload = json.loads(
+                self.read_request_body().decode("utf-8") or "{}"
+            )
+
+            name = payload.get("monster")
+            enabled = set_rally_monster_enabled(
+                name,
+                payload.get("enabled")
+            )
+
+            return json_response(self, 200, {
+                "ok": True,
+                "monster": name,
+                "enabled": enabled
+            })
+
+        except (ValueError, TypeError, json.JSONDecodeError) as error:
+            return json_response(self, 400, {
+                "ok": False,
+                "error": str(error)
+            })
+
+        except Exception as error:
+            return json_response(self, 500, {
+                "ok": False,
+                "error": str(error)
+            })
 
     def read_request_body(self):
         length = int(self.headers.get("Content-Length", "0"))
         if length > 0:
             return self.rfile.read(length)
         return b""
+
+    def handle_set_research_mode(self):
+        try:
+            payload = json.loads(
+                self.read_request_body().decode("utf-8")
+            )
+
+            if not isinstance(payload, dict):
+                raise ValueError("Expected JSON object")
+
+            mode = set_research_flow_mode(
+                payload.get("mode", "")
+            )
+
+            return json_response(self, 200, {
+                "ok": True,
+                "mode": mode,
+                "restart_required": True,
+            })
+
+        except (ValueError, UnicodeDecodeError) as exc:
+            return json_response(self, 400, {
+                "ok": False,
+                "error": str(exc),
+            })
+
+        except OSError as exc:
+            return json_response(self, 500, {
+                "ok": False,
+                "error": str(exc),
+            })
+
+    def handle_set_treasure_mode(self):
+        try:
+            payload = json.loads(
+                self.read_request_body().decode("utf-8")
+            )
+
+            if not isinstance(payload, dict):
+                raise ValueError("Expected JSON object")
+
+            mode = set_treasure_flow_mode(
+                payload.get("mode", "")
+            )
+
+            return json_response(self, 200, {
+                "ok": True,
+                "mode": mode,
+                "restart_required": True,
+            })
+
+        except (ValueError, UnicodeDecodeError) as exc:
+            return json_response(self, 400, {
+                "ok": False,
+                "error": str(exc),
+            })
+
+        except OSError as exc:
+            return json_response(self, 500, {
+                "ok": False,
+                "error": str(exc),
+            })
 
     def handle_locked_action(self, action_func):
         self.read_request_body()

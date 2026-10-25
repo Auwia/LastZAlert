@@ -10,6 +10,7 @@ class Workflow(IntEnum):
     MINISTRY = 6
     FORZIERE = 5
     GENERIC  = 4
+    COMPLETE_RESEARCH = 12
     RESEARCH = 3
     RALLY    = 2
     HERO     = 1

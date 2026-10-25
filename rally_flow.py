@@ -7,6 +7,7 @@ import time
 from enum import Enum
 
 from workflow_manager import WORKFLOW_MANAGER, Workflow
+from flow_control import get_all_rally_monster_states
 from bot_utils import (
     crop_roi,
     match_any,
@@ -252,6 +253,23 @@ class RallyFlow:
         # FIND MONSTER IN FIXED ROW SLOTS
         # -----------------------------------------
         if self.state == RallyState.FIND_MONSTER:
+
+            # Refresh templates and filter by frontend selection.
+            self.monster_templates = load_templates("rally/monsters")
+            monster_states = get_all_rally_monster_states()
+
+            enabled_templates = [
+                item for item in self.monster_templates
+                if monster_states.get(
+                    os.path.basename(str(item[0])), False
+                )
+            ]
+
+            if not enabled_templates:
+                self.log("[RALLY] No enabled monsters -> release")
+                self.finish()
+                return
+
             best = {
                 "slot": None,
                 "name": None,
@@ -274,7 +292,7 @@ class RallyFlow:
 
                 name, score, loc, hw, scale = match_any_multiscale(
                     roi,
-                    self.monster_templates,
+                    enabled_templates,
                     MONSTER_SCALES
                 )
 
