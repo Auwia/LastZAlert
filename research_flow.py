@@ -77,6 +77,7 @@ class ResearchState(Enum):
     START_RESEARCH = 5
     REPLENISH = 6
     HELP = 7
+    REPLENISH_CONFIRM = 9
     EXIT = 8
 
 
@@ -372,6 +373,7 @@ class ResearchFlow:
             "research": load_templates("research/research_button.png"),
             "help": load_templates("research/help_button.png"),
             "replenish": load_templates("research/replenish.png"),
+            "confirm": load_templates("research/confirm.png"),
         }
 
         self.research_priorities = [
@@ -936,19 +938,59 @@ class ResearchFlow:
 
         if self.state == ResearchState.REPLENISH:
 
-            name_r, score_r, loc_r, hw_r = match_any(img, self.templates["replenish"])
+            name_r, score_r, loc_r, hw_r = match_any(
+                img, self.templates["replenish"]
+            )
 
             if name_r and score_r >= THR:
-                adb_tap(loc_r[0] + hw_r[1]//2, loc_r[1] + hw_r[0]//2)
-                self.log("[RESEARCH] replenish all tapped")
-                time.sleep(1)
+                adb_tap(
+                    loc_r[0] + hw_r[1] // 2,
+                    loc_r[1] + hw_r[0] // 2
+                )
+                self.log(
+                    f"[RESEARCH] replenish all tapped "
+                    f"score={score_r:.3f}"
+                )
+                self.state = ResearchState.REPLENISH_CONFIRM
+                self._mark()
+                return
 
+            # Replenishment is optional. Allow the popup time to appear.
+            if time.time() - self.last_progress_ts < 8:
+                return
+
+            self.log("[RESEARCH] no replenish popup -> HELP")
             self.state = ResearchState.HELP
             self._mark()
             return
 
         # -----------------------------------------------------
+        if self.state == ResearchState.REPLENISH_CONFIRM:
 
+            name_c, score_c, loc_c, hw_c = match_any(
+                img, self.templates["confirm"]
+            )
+
+            if name_c and score_c >= THR:
+                adb_tap(
+                    loc_c[0] + hw_c[1] // 2,
+                    loc_c[1] + hw_c[0] // 2
+                )
+                self.log(
+                    f"[RESEARCH] replenish confirmed "
+                    f"score={score_c:.3f}"
+                )
+                # Resources are now available.
+                # Retry the Research button after replenishment.
+                self.state = ResearchState.START_RESEARCH
+                self._mark()
+                return
+
+            # Wait for the confirmation popup; the global stall
+            # watchdog handles unexpected or missing dialogs.
+            return
+
+        # -----------------------------------------------------
         if self.state == ResearchState.HELP:
 
             name, score, loc, hw = match_any(img, self.templates["help"])
