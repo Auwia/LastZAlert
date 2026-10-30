@@ -766,12 +766,25 @@ def treasure_detect_tick(stop_evt: threading.Event, img=None) -> None:
     log_event(f"[TREASURE] rilevato {name} score={score:.3f}")
     send_notification(f"🎁 Tesoro rilevato! ({name}) score={score:.2f}")
 
+    # Read the selected mode when a new treasure is detected.
+    # Never replace a TreasureFlow that is already running.
+    global TREASURE_FLOW_MODE
+
+    requested_mode = get_treasure_flow_mode()
+
+    if requested_mode != TREASURE_FLOW_MODE:
+        if requested_mode == "original":
+            flows["treasure"] = TreasureFlow(log_event)
+        else:
+            flows["treasure"] = TreasureFlowSimplified(log_event)
+
+        TREASURE_FLOW_MODE = requested_mode
+        log_event(f"[TREASURE] mode selected -> {TREASURE_FLOW_MODE}")
+
     flow = flows.get("treasure")
     if flow is not None:
         flow.trigger(coords, loc, hw)
-        log_event(
-            f"[TREASURE] detected -> {TREASURE_FLOW_MODE} flow"
-        )
+        log_event(f"[TREASURE] detected -> {TREASURE_FLOW_MODE} flow")
     else:
         log_event("[TREASURE] detected but workflow busy -> waiting")
 
@@ -1573,6 +1586,9 @@ def maybe_trigger_donation() -> None:
     flow.trigger()
 
 
+_ministry_blocker_absent_count = 0
+
+
 def maybe_trigger_ministry(img=None) -> None:
     if not is_flow_enabled("ministry"):
         return
@@ -1590,13 +1606,31 @@ def maybe_trigger_ministry(img=None) -> None:
     if img is None:
         return
 
+    global _ministry_blocker_absent_count
+
     blocker_visible = officer_icon_visible(img)
 
     if blocker_visible:
-        if not DEBUG_EVENTS_ONLY:
-            log_event("[MINISTRY] skip trigger -> officer/application already present")
+        if _ministry_blocker_absent_count:
+            log_event(
+                "[MINISTRY BLOCKER] detected -> "
+                "reset absence counter"
+            )
+        _ministry_blocker_absent_count = 0
         return
 
+    _ministry_blocker_absent_count += 1
+
+    log_event(
+        f"[MINISTRY BLOCKER] absent "
+        f"{_ministry_blocker_absent_count}/3"
+    )
+
+    if _ministry_blocker_absent_count < 3:
+        return
+
+    _ministry_blocker_absent_count = 0
+    log_event("[MINISTRY BLOCKER] absence confirmed -> trigger")
     flow.trigger()
 
 

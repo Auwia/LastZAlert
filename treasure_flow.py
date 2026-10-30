@@ -39,7 +39,7 @@ MARCH_DIR       = os.path.join(TEMPL_DIR, "march")
 
 # Match thresholds (tarali)
 THR_CHAT_LINK   = 0.67
-THR_HELI        = 0.45
+THR_HELI = 0.65
 THR_MAGNIFIER   = 0.45
 THR_MARCH       = 0.45
 
@@ -560,7 +560,7 @@ class TreasureFlow:
                 cx, cy = tap_match_in_fullscreen(coords, loc, hw)
                 self._mark_action()
                 self.log(f"[TREASURE-FLOW] chat link tap @ {cx},{cy} score={score:.3f} thr={THR_CHAT_LINK}")
-                time.sleep(1.0)
+                time.sleep(2.5)
                 self.set_state(FlowState.IN_MAP_FIND_HELI)
             else:
                     self.log(f"[TREASURE-FLOW] link non ancora valido: score={score:.3f} < thr={THR_CHAT_LINK}")
@@ -653,6 +653,15 @@ class TreasureFlow:
         # 6) DIGGING_WAIT_TIMER: aspetta timer OCR; se <=5 -> SPAM
         # -------------------------
         if self.state == FlowState.DIGGING_WAIT_TIMER:
+            # Come Simplified: elicottero visibile -> reset timer stato
+            roi_heli, _ = crop_roi(img, ROI_HELI)
+            heli_name, heli_score, _, _ = match_any(
+                roi_heli, self.t_heli
+            )
+
+            if heli_name is not None and heli_score >= THR_HELI:
+                self.state_enter_ts = time.time()
+
             sec = self.read_timer_seconds(img)
 
             if sec is None:
