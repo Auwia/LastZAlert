@@ -40,8 +40,8 @@ MARCH_DIR       = os.path.join(TEMPL_DIR, "march")
 # Match thresholds (tarali)
 THR_CHAT_LINK   = 0.67
 THR_HELI = 0.65
-THR_MAGNIFIER   = 0.45
-THR_MARCH       = 0.45
+THR_MAGNIFIER   = 0.85
+THR_MARCH       = 0.85
 
 # Loop / timings
 FLOW_TICK_SEC = 0.25
@@ -84,11 +84,11 @@ ROI_HELI = (0.0, 1.0, 0.0, 1.0) #backup: (0.15, 0.85, 0.25, 0.80)
 ROI_MAGNIFIER = (0.0, 1.0, 0.0, 1.0) #backup: (0.35, 0.65, 0.55, 0.85)
 
 # Bottone March: pop-up centrale/basso
-ROI_MARCH = (0.0, 1.0, 0.0, 1.0) #backup: (0.20, 0.80, 0.55, 0.90)
+ROI_MARCH = (0.0, 1.0, 0.0, 1.0)
 
 # Timer sopra (come nel tuo screenshot con lente e timer vicino/ sopra)
 # Metti qui la fascia dove compare tipo "01:59:54" ecc
-ROI_TIMER_TEXT = (0.33, 0.67, 0.39, 0.49)
+ROI_TIMER_TEXT = (0.42, 0.59, 0.33, 0.37)
 
 # Zona “tra elicottero e timer” dove vuoi spammare tap (random) quando <= 5 sec
 ROI_SPAM_TAP = (0.35, 0.65, 0.35, 0.70)
@@ -221,25 +221,28 @@ def tap_center_of_roi(img, roi_frac):
     return cx, cy
 
 def parse_timer_text_to_seconds(text: str) -> Optional[int]:
-    """
-    Accetta formati tipo:
-      01:59:54
-      00:29:52
-      5:03  (se mai)
-    """
+    """Interpreta MM:SS e HH:MM:SS correggendo gli spazi OCR."""
     text = text.strip()
-    # Prendi prima occorrenza tipo H+:MM:SS o MM:SS
-    m = re.search(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", text)
+
+    # Spazio che sostituisce i due punti.
+    text = re.sub(r"(?<=\d)\s+(?=\d{2}(?:\s|$))", ":", text)
+
+    # Elimina gli altri spazi.
+    text = re.sub(r"\s+", "", text)
+
+    # Non accettare corrispondenze parziali.
+    m = re.fullmatch(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", text)
     if not m:
         return None
-    a = int(m.group(1))
-    b = int(m.group(2))
-    c = int(m.group(3)) if m.group(3) else None
+
+    a, b, c = m.groups()
+    a, b = int(a), int(b)
+
     if c is None:
-        # MM:SS
-        return a * 60 + b
-    # HH:MM:SS
-    return a * 3600 + b * 60 + c
+        return a * 60 + b if b < 60 else None
+
+    c = int(c)
+    return a * 3600 + b * 60 + c if a < 24 and b < 60 and c < 60 else None
 
 def log_event(msg: str):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -291,7 +294,10 @@ class TreasureFlow:
         self.state = FlowState.IDLE
         self.last_action_ts = 0.0
         self.timer_missing_ticks = 0
+        self.heli_missing_ticks = 0
         self.timer_disappeared_ts = None
+        self.last_timer_ocr_ts = 0.0
+        self.last_timer_seconds = None
         self.state_enter_ts = time.time()
         self.flow_start_ts = None
         self.debug_dir = None
@@ -414,7 +420,10 @@ class TreasureFlow:
             self.log(f"[TREASURE-DEBUG][RUN] {self.debug_dir}")
         self.set_state(FlowState.GO_CHAT)
         self.timer_missing_ticks = 0
+        self.heli_missing_ticks = 0
         self.timer_disappeared_ts = None
+        self.last_timer_ocr_ts = 0.0
+        self.last_timer_seconds = None
         self.log("[TREASURE-FLOW] trigger -> GO_CHAT")
 
     def set_state(self, new_state: FlowState):
@@ -605,84 +614,160 @@ class TreasureFlow:
                 self._mark_action()
                 self.log(f"[TREASURE-FLOW] magnifier tap @ {cx},{cy} score={score:.3f} thr={THR_MAGNIFIER}")
                 self.set_state(FlowState.IN_TEAM_FIND_MARCH)
+                return
+
+            # Lente non riconosciuta: controlla se il timer è già visibile.
+            roi_heli, _ = crop_roi(img, ROI_HELI)
+            heli_name, heli_score, _, _ = match_any(roi_heli, self.t_heli)
+
+            if heli_name and heli_score >= THR_HELI:
+                self.heli_missing_ticks = 0
+            else:
+                self.heli_missing_ticks += 1
+                self.log(
+                    f"[TREASURE-FLOW] helicopter missing "
+                    f"{self.heli_missing_ticks}/5"
+                )
+                if self.heli_missing_ticks >= 5:
+                    self._finish("helicopter disappeared")
+                    return
+
+            sec = self.read_timer_seconds(img)
+
+            if sec is not None:
+                self.log(
+                    f"[TREASURE-FLOW] timer already visible ({sec}s) "
+                    "-> DIGGING_WAIT_TIMER"
+                )
+                self.timer_missing_ticks = 0
+                self._mark_action()
+                self.set_state(FlowState.DIGGING_WAIT_TIMER)
+
             return
 
         # -------------------------
         # 5) IN_TEAM_FIND_MARCH: tap sul bottone March (team già selezionato di default)
         # -------------------------
         if self.state == FlowState.IN_TEAM_FIND_MARCH:
-            if not self.t_march:
-                self.log("[TREASURE-FLOW] manca template march/, stop flow")
-                self._finish("flow stopped")
-                return
+            # Verifica che almeno una macchina sia libera (icona Z).
+            car_sleep_path = os.path.join(
+                os.path.dirname(__file__),
+                "treasure_flow", "march", "car_sleep.png"
+            )
+            car_sleep = cv2.imread(car_sleep_path)
 
-            roi, coords = crop_roi(img, ROI_MARCH)
-            name, score, loc, hw = match_any(roi, self.t_march)
-            self.debug_match("march", name, score, THR_MARCH, loc, hw, img)
-            if name and score >= THR_MARCH:
-                cx, cy = tap_match_in_fullscreen(coords, loc, hw) 
-                self._mark_action()
-                self.log(f"[TREASURE-FLOW] MARCH tap @ {cx},{cy} score={score:.3f} thr={THR_MARCH}")
-                self.set_state(FlowState.AFTER_MARCH_TAP_HELI)
+            if car_sleep is not None:
+                # Le tre macchine sono nella colonna destra.
+                roi_sleep, _ = crop_roi(
+                    img, (0.82, 1.0, 0.38, 0.65)
+                )
+                _, sleep_score, _, _ = match_any(
+                    roi_sleep, [("car_sleep.png", car_sleep)]
+                )
+
+                self.log(
+                    f"[TREASURE-FLOW] car_sleep score={sleep_score:.3f}"
+                )
+
+                if sleep_score < 0.85:
+                    self.log(
+                        "[TREASURE-FLOW] no free cars "
+                        "-> skip MARCH -> DIGGING_WAIT_TIMER"
+                    )
+                    self.timer_missing_ticks = 0
+                    self._mark_action()
+                    self.set_state(FlowState.DIGGING_WAIT_TIMER)
+                    return
+
+            # MARCH opzionale: attendi al massimo 15 secondi.
+            if self.t_march:
+                roi, coords = crop_roi(img, ROI_MARCH)
+                name, score, loc, hw = match_any(roi, self.t_march)
+                self.debug_match("march", name, score, THR_MARCH, loc, hw, img)
+
+                if name and score >= THR_MARCH:
+                    cx, cy = tap_match_in_fullscreen(coords, loc, hw)
+                    self._mark_action()
+                    self.log(
+                        f"[TREASURE-FLOW] MARCH tap @ {cx},{cy} "
+                        f"score={score:.3f} thr={THR_MARCH}"
+                    )
+                    self.set_state(FlowState.AFTER_MARCH_TAP_HELI)
+                    self.timer_missing_ticks = 0
+                    return
+
+            if time.time() - self.state_enter_ts >= 15.0:
+                self.log(
+                    "[TREASURE-FLOW] MARCH non trovato entro 15s "
+                    "-> DIGGING_WAIT_TIMER"
+                )
                 self.timer_missing_ticks = 0
+                self._mark_action()
+                self.set_state(FlowState.DIGGING_WAIT_TIMER)
+
             return
 
         # -------------------------
         # AFTER_MARCH_TAP_HELI
         # -------------------------
         if self.state == FlowState.AFTER_MARCH_TAP_HELI:
-        
             roi, coords = crop_roi(img, ROI_HELI)
             name, score, loc, hw = match_any(roi, self.t_heli)
             self.debug_match("helicopter", name, score, THR_HELI, loc, hw, img)
-        
+
             if name and score >= THR_HELI:
-                cx, cy = tap_match_in_fullscreen(coords, loc, hw)
-        
-                self.log(f"[TREASURE-FLOW] second heli tap @ {cx},{cy}")
-        
+                self.log("[TREASURE-FLOW] helicopter visible -> wait timer (no second tap)")
                 self._mark_action()
-        
-                time.sleep(1.2)
-        
                 self.set_state(FlowState.DIGGING_WAIT_TIMER)
-        
+
             return
 
         # -------------------------
         # 6) DIGGING_WAIT_TIMER: aspetta timer OCR; se <=5 -> SPAM
         # -------------------------
         if self.state == FlowState.DIGGING_WAIT_TIMER:
-            # Come Simplified: elicottero visibile -> reset timer stato
+            # Elicottero presente: il workflow deve continuare.
             roi_heli, _ = crop_roi(img, ROI_HELI)
             heli_name, heli_score, _, _ = match_any(
                 roi_heli, self.t_heli
             )
 
             if heli_name is not None and heli_score >= THR_HELI:
+                self.heli_missing_ticks = 0
                 self.state_enter_ts = time.time()
-
-            sec = self.read_timer_seconds(img)
-
-            if sec is None:
-                self.timer_missing_ticks += 1
-
-                if self._timer_wait_started is None:
-                    self._timer_wait_started = time.monotonic()
-
-                elapsed = time.monotonic() - self._timer_wait_started
-
-                if elapsed >= 90.0:
-                    self.log(
-                        "[TREASURE-FLOW] timer OCR unavailable for "
-                        f"{elapsed:.1f}s -> abort"
-                    )
-                    self._finish("timer OCR timeout")
+                self._timer_wait_started = None
+            else:
+                self.heli_missing_ticks += 1
+                self.log(
+                    f"[TREASURE-FLOW] helicopter missing "
+                    f"{self.heli_missing_ticks}/5"
+                )
+                if self.heli_missing_ticks >= 5:
+                    self._finish("helicopter disappeared")
                     return
 
+            # OCR ogni 2s; sotto i 20s ogni 0.5s.
+            now = time.monotonic()
+            interval = 0.5 if (
+                self.last_timer_seconds is not None
+                and self.last_timer_seconds < 20
+            ) else 2.0
+
+            if now - self.last_timer_ocr_ts < interval:
                 return
 
-            self._timer_wait_started = time.monotonic()
+            self.last_timer_ocr_ts = now
+            sec = self.read_timer_seconds(img)
+
+            if sec is not None:
+                self.last_timer_seconds = sec
+
+            if sec is None:
+                # OCR opzionale: non interrompere il workflow.
+                self.timer_missing_ticks += 1
+                return
+
+            self._timer_wait_started = None
 
             # Timer presente
             self.timer_missing_ticks = 0
