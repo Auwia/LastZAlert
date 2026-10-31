@@ -22,6 +22,7 @@ from hero_flow import HeroFlow
 from ministry_flow import MinistryFlow
 from rally_flow import RallyFlow, RALLY_TRIGGER_ROI
 from research_flow import ResearchFlow
+from workers_flow import WorkersFlow
 from complete_research_flow import CompleteResearchFlow
 from tank_flow import TankFlow
 from simple_events import SIMPLE_EVENTS
@@ -1893,6 +1894,31 @@ def lastz_game_foreground():
     return _game_check_result
 
 
+
+workers_flow = WorkersFlow(
+    log_fn=log_event,
+    notify_fn=send_notification,
+)
+
+
+def maybe_trigger_workers(img=None) -> None:
+    if not is_flow_enabled("workers"):
+        return
+
+    if not can_start_common(Workflow.WORKERS):
+        return
+
+    if img is None:
+        return
+
+    workers_flow.step(img)
+
+
+def workers_tick(img=None) -> None:
+    if img is not None:
+        workers_flow.step(img)
+
+
 def run_screenshot_driven_engine(
     stop_evt: threading.Event,
     heal_flow: HealFlow
@@ -1915,6 +1941,7 @@ def run_screenshot_driven_engine(
         Workflow.RALLY,
         Workflow.HERO,
         Workflow.BOUNTY,
+        Workflow.WORKERS,
     ]
 
     # The cursor survives workflow acquisition and release.
@@ -2054,6 +2081,9 @@ def run_screenshot_driven_engine(
 
         elif workflow == Workflow.BOUNTY:
             maybe_trigger_bounty(img)
+
+        elif workflow == Workflow.WORKERS:
+            timed_tick('WORKERS', maybe_trigger_workers, img)
 
         # If a workflow acquired the lock, keep its position.
         # The next iteration will execute that workflow.

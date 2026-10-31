@@ -15,6 +15,7 @@ class Workflow(IntEnum):
     RALLY    = 2
     HERO     = 1
     BOUNTY   = 0
+    WORKERS  = 13
 
 class WorkflowManager:
     def __init__(self):

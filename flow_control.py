@@ -19,6 +19,7 @@ FLOW_NAMES = (
     "rally",
     "hero",
     "bounty",
+    "workers",
 )
 
 
